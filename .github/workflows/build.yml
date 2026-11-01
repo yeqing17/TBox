@@ -61,6 +61,17 @@ jobs:
               -p:PublishDir="$PWD\dist\\" -v:m
           if ($LASTEXITCODE -ne 0) { throw "publish failed: $LASTEXITCODE" }
 
+      # MSBuild -t:Publish leaves the XAML/PRI payload in the build output folder.
+      - name: Complete publish payload
+        shell: pwsh
+        run: |
+          $out = 'src/TBox.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64'
+          if (-not (Test-Path $out)) { throw "build output not found: $out" }
+          Copy-Item "$out/resources.pri" dist/ -Force -ErrorAction SilentlyContinue
+          Copy-Item "$out/*.xbf" dist/ -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path 'dist/resources.pri')) { throw 'resources.pri was not produced' }
+          "payload files: {0}" -f (Get-ChildItem dist | Measure-Object).Count
+
       - name: Verify payload
         shell: pwsh
         run: |
