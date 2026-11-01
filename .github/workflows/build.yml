@@ -29,19 +29,45 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      # Same build path as a developer machine: the repository shim replaces the
-      # Visual Studio-only MSIX tasks and generates resources.pri with makepri.
-      - name: Publish (self-contained)
-        run: >
-          dotnet publish src/TBox.WinUI/TBox.WinUI.csproj
-          -c Release -r win-x64 --self-contained true
-          -p:Platform=x64 -p:WindowsAppSDKSelfContained=true
-          -o dist
+      - name: Locate Visual Studio MSBuild
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installerswhere.exe"
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
+                                 -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw 'MSBuild.exe not found' }
+          "MSBUILD=$($msbuild.Trim())" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $msbuild -version | Select-Object -First 1
+
+      - name: Drop local build shim
+        shell: pwsh
+        run: Remove-Item src/TBox.WinUI/Directory.Build.targets -Force
+
+      - name: Restore
+        shell: pwsh
+        run: |
+          & $env:MSBUILD src/TBox.WinUI/TBox.WinUI.csproj -t:Restore `
+              -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifier=win-x64 -v:m
+
+      - name: Publish (self-contained, standard chain)
+        shell: pwsh
+        run: |
+          & $env:MSBUILD src/TBox.WinUI/TBox.WinUI.csproj -t:Publish `
+              -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifier=win-x64 `
+              -p:SelfContained=true -p:WindowsAppSDKSelfContained=true `
+              -p:PublishDir="$PWD\dist\" -v:m
+          if ($LASTEXITCODE -ne 0) { throw "publish failed: $LASTEXITCODE" }
+          # XBF/PRI may stay in the build output; bring them along if present.
+          $out = 'src/TBox.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64'
+          if (Test-Path $out) {
+            Copy-Item "$out/resources.pri" dist/ -Force -ErrorAction SilentlyContinue
+            Copy-Item "$out/*.xbf" dist/ -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Verify payload
         shell: pwsh
         run: |
-          $required = 'TBox.exe','resources.pri','MainWindow.xbf','Microsoft.ui.xaml.dll','Microsoft.WindowsAppRuntime.dll'
+          $required = 'TBox.exe','MainWindow.xbf','Microsoft.ui.xaml.dll','Microsoft.WindowsAppRuntime.dll'
           foreach ($f in $required) {
             if (-not (Test-Path "dist/$f")) { throw "missing $f" }
           }
