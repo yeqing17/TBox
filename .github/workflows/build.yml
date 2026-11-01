@@ -29,18 +29,37 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      # The runner has the full Visual Studio Windows workload, so the local
-      # makepri shim is not needed here.
+      # WinUI 3 packaging tasks live in Visual Studio, not in the .NET SDK, so the
+      # build has to run on MSBuild.exe from VS. The runner has the full Windows
+      # workload, which means the local makepri shim is not needed either.
+      - name: Locate Visual Studio MSBuild
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
+                                 -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw 'MSBuild.exe not found' }
+          "MSBUILD=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $msbuild -version | Select-Object -First 1
+
       - name: Drop local build shim
         shell: pwsh
         run: Remove-Item src/TBox.WinUI/Directory.Build.targets -Force
 
+      - name: Restore
+        shell: pwsh
+        run: |
+          & $env:MSBUILD src/TBox.WinUI/TBox.WinUI.csproj -t:Restore `
+              -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifier=win-x64 -v:m
+
       - name: Publish (self-contained)
-        run: >
-          dotnet publish src/TBox.WinUI/TBox.WinUI.csproj
-          -c Release -r win-x64 --self-contained true
-          -p:Platform=x64 -p:WindowsAppSDKSelfContained=true
-          -o dist
+        shell: pwsh
+        run: |
+          & $env:MSBUILD src/TBox.WinUI/TBox.WinUI.csproj -t:Publish `
+              -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifier=win-x64 `
+              -p:SelfContained=true -p:WindowsAppSDKSelfContained=true `
+              -p:PublishDir="$PWD\dist\\" -v:m
+          if ($LASTEXITCODE -ne 0) { throw "publish failed: $LASTEXITCODE" }
 
       - name: Verify payload
         shell: pwsh
