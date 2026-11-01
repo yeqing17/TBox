@@ -1,0 +1,12 @@
+# build output
+bin/
+obj/
+dist/
+
+# local scratch
+.shots/
+.tmp/
+.testdata*/
+.winui-log.txt
+*.log
+*.user

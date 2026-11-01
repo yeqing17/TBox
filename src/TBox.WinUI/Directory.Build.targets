@@ -1,0 +1,81 @@
+<Project>
+  <!--
+    This machine has Visual Studio Build Tools only - no UWP/MSIX packaging workload - so the
+    Visual Studio-private MSBuild tasks that Windows App SDK's buildTransitive targets import
+    (Microsoft.Build.AppxPackage.dll / Microsoft.Build.Packaging.Pri.Tasks.dll) do not exist.
+
+    Those targets only exist to produce an MSIX payload / merged PRI. TBox is an unpackaged app,
+    so they are neutralised here and resources.pri is generated with makepri instead.
+  -->
+  <Target Name="CopyLocalFilesOutputGroup" Returns="@(CopyLocalFilesOutputGroupOutput)">
+    <ItemGroup>
+      <CopyLocalFilesOutputGroupOutput Include="@(ReferenceCopyLocalPaths)">
+        <TargetPath>%(ReferenceCopyLocalPaths.DestinationSubDirectory)%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</TargetPath>
+      </CopyLocalFilesOutputGroupOutput>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="AddPriPayloadFilesToCopyToOutputDirectoryItems" />
+  <Target Name="GetMrtPackagingOutputs" />
+  <Target Name="_ExpandPriFiles" />
+  <Target Name="_ExpandProjectPriFile" />
+  <Target Name="_GeneratePrisForPortableLibraries" />
+  <Target Name="_GenerateProjectPriConfigurationFiles" />
+  <Target Name="_GenerateProjectPriFileCore" />
+  <Target Name="_GetDefaultResourceLanguage" />
+  <Target Name="_GetPackageArchitecture" />
+  <Target Name="_GetPriFilesFromPayload" />
+  <Target Name="_GetSdkToolsPathsFromSdk" />
+  <Target Name="_ValidateConfiguration" />
+
+  <!--
+    Build the app's PRI index ourselves. makepri ships with Microsoft.Windows.SDK.BuildTools.
+    Only this app's XBF files and assets are staged and indexed; indexing the whole output
+    folder collides with the WinUI runtime's own resources.
+  -->
+  <PropertyGroup>
+    <TBoxMakePriPath>$(NuGetPackageRoot)microsoft.windows.sdk.buildtools\10.0.26100.1742\bin\10.0.26100.0\x64\makepri.exe</TBoxMakePriPath>
+  </PropertyGroup>
+
+  <Target Name="TBoxGeneratePri" AfterTargets="Build">
+    <PropertyGroup>
+      <_PriStage>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)priroot</_PriStage>
+      <_PriConfig>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)priconfig.xml</_PriConfig>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_PriXbf Include="$(OutDir)**\*.xbf" />
+      <_PriAsset Include="$(OutDir)Assets\**\*" />
+    </ItemGroup>
+
+    <Message Importance="high" Text="PRI-DEBUG OutDir=$(OutDir) XbfCount=@(_PriXbf->Count()) AssetCount=@(_PriAsset->Count())" />
+    <RemoveDir Directories="$(_PriStage)" />
+    <MakeDir Directories="$(_PriStage)" />
+    <Copy SourceFiles="@(_PriXbf)"
+          DestinationFiles="@(_PriXbf->'$(_PriStage)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="@(_PriAsset)"
+          DestinationFiles="@(_PriAsset->'$(_PriStage)/Assets/%(RecursiveDir)%(Filename)%(Extension)')" />
+
+    <Exec Condition="Exists('$(TBoxMakePriPath)')"
+          Command="&quot;$(TBoxMakePriPath)&quot; createconfig /cf &quot;$(_PriConfig)&quot; /dq en-US /o"
+          ContinueOnError="true" />
+
+    <Exec Condition="Exists('$(TBoxMakePriPath)') and Exists('$(_PriConfig)')"
+          Command="&quot;$(TBoxMakePriPath)&quot; new /pr &quot;$(_PriStage)&quot; /cf &quot;$(_PriConfig)&quot; /of &quot;$(_PriStage)\resources.pri&quot; /in TBox /o"
+          ContinueOnError="true" />
+
+    <Copy Condition="Exists('$(_PriStage)/resources.pri')"
+          SourceFiles="$(_PriStage)/resources.pri" DestinationFolder="$(OutDir)" />
+  </Target>
+
+  <!-- dotnet publish builds into its own folder; carry the compiled XAML and PRI along. -->
+  <Target Name="TBoxCopyXamlToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_PubXbf Include="$(OutDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PubXbf)"
+          DestinationFiles="@(_PubXbf->'$(PublishDir)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy Condition="Exists('$(OutDir)resources.pri')"
+          SourceFiles="$(OutDir)resources.pri" DestinationFolder="$(PublishDir)" />
+  </Target>
+</Project>
