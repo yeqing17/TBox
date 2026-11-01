@@ -39,8 +39,8 @@ jobs:
           $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
                                  -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
           if (-not $msbuild) { throw 'MSBuild.exe not found' }
-          "MSBUILD=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $msbuild -version | Select-Object -First 1
+          "MSBUILD=$($msbuild.Trim())" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $msbuild -version | Select-Object -First 1
 
       - name: Drop local build shim
         shell: pwsh
