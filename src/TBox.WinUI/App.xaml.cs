@@ -4,13 +4,20 @@ namespace TBox;
 
 public partial class App : Application
 {
-    private const string LogPath = @"F:/zcode/TBox/.winui-log.txt";
+    // Log file under %LOCALAPPDATA%/TBox, created on demand (also used by CI smoke tests).
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TBox", "app.log");
     private Window? _window;
     private Mutex? _mutex;
 
     internal static void Log(string message)
     {
-        try { File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}\n"); } catch { }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + "\n");
+        }
+        catch { }
     }
 
     public App()

@@ -29,23 +29,56 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      - name: Publish
+      # The runner has the full Visual Studio Windows workload, so the local
+      # makepri shim is not needed here.
+      - name: Drop local build shim
+        shell: pwsh
+        run: Remove-Item src/TBox.WinUI/Directory.Build.targets -Force
+
+      - name: Publish (self-contained)
         run: >
           dotnet publish src/TBox.WinUI/TBox.WinUI.csproj
-          -c Release -r win-x64 --self-contained false -p:Platform=x64
+          -c Release -r win-x64 --self-contained true
+          -p:Platform=x64 -p:WindowsAppSDKSelfContained=true
           -o dist
 
-      - name: Sanity check output
+      - name: Verify payload
         shell: pwsh
         run: |
-          if (-not (Test-Path 'dist/TBox.exe')) { throw 'TBox.exe missing' }
-          if (-not (Test-Path 'dist/resources.pri')) { throw 'resources.pri missing' }
-          if (-not (Test-Path 'dist/MainWindow.xbf')) { throw 'MainWindow.xbf missing' }
-          Get-ChildItem dist | Measure-Object | ForEach-Object { "dist files: $($_.Count)" }
+          $required = 'TBox.exe','resources.pri','MainWindow.xbf','Microsoft.ui.xaml.dll','Microsoft.WindowsAppRuntime.dll'
+          foreach ($f in $required) {
+            if (-not (Test-Path "dist/$f")) { throw "missing $f" }
+          }
+          "size: {0:N0} MB" -f ((Get-ChildItem dist -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Smoke test (must reach Activated)
+        shell: pwsh
+        run: |
+          $env:TBOX_DATA = Join-Path $env:RUNNER_TEMP 'tboxdata'
+          $log = Join-Path $env:LOCALAPPDATA 'TBox\app.log'
+          Remove-Item $log -Force -ErrorAction SilentlyContinue
+
+          $p = Start-Process -FilePath (Resolve-Path 'dist\TBox.exe') -PassThru
+          $deadline = (Get-Date).AddSeconds(30)
+          $activated = $false
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern 'Activated' -Quiet)) { $activated = $true; break }
+            if ($p.HasExited) { break }
+          }
+
+          if (Test-Path $log) { Get-Content $log -Tail 15 }
+          if ($activated -ne $true) { throw 'app never reached Activated (WinUI runtime init failed)' }
+          if ($p.HasExited) { throw "app exited early: $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          'smoke test passed'
 
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path dist/* -DestinationPath TBox-v${{ github.run_number }}-win-x64.zip -Force
+        run: |
+          $zip = "TBox-${{ github.ref_name }}-win-x64.zip"
+          Compress-Archive -Path dist/* -DestinationPath $zip -Force
+          "{0:N1} MB" -f ((Get-Item $zip).Length / 1MB)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
