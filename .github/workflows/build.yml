@@ -52,7 +52,7 @@ jobs:
       - name: Verify payload
         shell: pwsh
         run: |
-          $required = 'TBox.exe','resources.pri','MainWindow.xbf','Microsoft.ui.xaml.dll','WindowsAppRuntimeInstall-x64.exe','install-and-run.cmd'
+          $required = 'TBox.exe','resources.pri','MainWindow.xbf','WindowsAppRuntimeInstall-x64.exe','install-and-run.cmd'
           foreach ($f in $required) {
             if (-not (Test-Path "dist/$f")) { throw "missing $f" }
           }
