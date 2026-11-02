@@ -152,7 +152,7 @@ internal sealed class CapsuleWindow
         _root = root;
 
         _window.Content = root;
-        _window.SystemBackdrop = new DesktopAcrylicBackdrop();
+        if (!AppEnv.Opaque) _window.SystemBackdrop = new DesktopAcrylicBackdrop();
 
         // Follow live DPI changes (display-scale slider, moving to a monitor with another scale):
         // the XAML content rescales by itself, but the window's pixel size does not.

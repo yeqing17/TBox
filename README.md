@@ -4,7 +4,9 @@
 
 Windows 10 / 11 · WinUI 3 · .NET 8 · 本地存储 · 无网络请求
 
-![TBox 面板](docs/images/panel-light.png)
+| 浅色 | 深色 |
+| --- | --- |
+| ![TBox 面板（浅色）](docs/images/panel-light.png) | ![TBox 面板（深色）](docs/images/panel-dark.png) |
 
 ## 为什么做它
 
@@ -28,9 +30,9 @@ TBox 只做一件事：**把这些快捷方式收进盒子，分类、可搜、�
 - **常驻系统**：托盘图标、`Ctrl+Alt+T` 全局唤出、开机自启、单实例、不进 Alt+Tab。
 - **纯本地**：数据就是一个可读的 JSON，随时备份/迁移/手改。
 
-| 胶囊（收起态） | 设置 |
+| 收起胶囊 | 设置 |
 | --- | --- |
-| ![胶囊](docs/images/capsule.png) | ![设置](docs/images/settings.png) |
+| ![胶囊（浅色）](docs/images/capsule.png) ![胶囊（深色）](docs/images/capsule-dark.png) | ![设置（浅色）](docs/images/settings.png) ![设置（深色）](docs/images/settings-dark.png) |
 
 ## 快速开始
 

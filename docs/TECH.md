@@ -211,6 +211,16 @@ dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
 | `--flyout` | 启动即弹出（右下角） |
 | `--settings` | 启动后打开设置 |
 
+## 12.1 截图流水线
+
+文档里的界面截图不依赖桌面状态：用 `scripts/print-window.ps1` 对窗口句柄做 `PrintWindow`，
+再用 `.shots/compose.py` 按窗口圆角做遮罩、合成到纯色背景并加投影。
+
+- 演示数据放在独立目录（`TBOX_DATA`），不碰真实配置；
+- `TBOX_OPAQUE=1` 时应用不启用亚克力背板，否则 `PrintWindow` 会把窗口后面的画面采样进来
+  （深色截图会带上壁纸的颜色）；
+- `scripts/find-window.ps1` 按进程和窗口尺寸定位胶囊/对话框。
+
 ## 13. 已知限制
 
 - 独占全屏程序（全屏游戏）会盖住置顶窗口；

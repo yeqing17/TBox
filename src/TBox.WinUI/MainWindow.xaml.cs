@@ -46,7 +46,7 @@ public sealed partial class MainWindow : Window
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         // AppWindow becomes null once the window is re-parented into the desktop layer, so keep it.
         _appWindow = AppWindow;
-        SystemBackdrop = new DesktopAcrylicBackdrop();
+        if (!AppEnv.Opaque) SystemBackdrop = new DesktopAcrylicBackdrop();
         ConfigureWindow();
         Activated += OnFirstActivated;
         Activated += OnWindowActivated;

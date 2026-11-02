@@ -92,7 +92,7 @@ internal sealed class DialogWindow
             : Color.FromArgb(28, 0, 0, 0));
 
         _window.Content = root;
-        _window.SystemBackdrop = new DesktopAcrylicBackdrop();
+        if (!AppEnv.Opaque) _window.SystemBackdrop = new DesktopAcrylicBackdrop();
 
         // The dialog is deliberately window-sized (not content-sized), so its physical size has to
         // follow the monitor DPI — the XAML inside is laid out in DIPs.
