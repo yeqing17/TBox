@@ -110,6 +110,23 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 - 悬停检测由主窗口 50ms 定时器轮询 `GetCursorPos` 完成，不依赖 `PointerEntered/Exited`（会漏事件、状态卡住）；
 - 菜单/对话框/拖动/输入框聚焦时禁止自动收起。
 
+### 5.1 坐标单位（DIP vs 像素）
+
+进程清单是 PerMonitorV2，所以**有两套单位并存**，混用就会在高缩放屏上出错（曾导致 200% 缩放下胶囊被裁掉一半）：
+
+| 属于 DIP | 属于物理像素 |
+| --- | --- |
+| XAML 里的所有尺寸（`Width`、`Padding`、`CornerRadius`…） | `GetWindowRect` / `GetCursorPos` / `WM_*` 的 `lParam` |
+| 代码里的设计常量（胶囊 56 宽、展开条 38 高、吸附距离 16、竖条露边 16…） | `DisplayArea.WorkArea`、`AppWindow.MoveAndResize`、`AppWindow.Position` |
+
+规则：
+
+- 常量按 DIP 书写，交给上面右列之前一律过 `Dpi.Px(值, Dpi.ScaleFor(hwnd))`；反查用 `Dpi.Dip(px, scale)`；
+- 命中测试两边都用物理像素：如展开条带宽用 `CapsuleWindow.ExpandTabPixels`（= DIP × scale），不要直接拿 38 去和 `GetWindowRect` 比；
+- 窗口像素尺寸是**用户数据**（`data.json` 的 `window.width/height`、`dockWidth`），只在与最小尺寸比较时换成 DIP 下限；
+- 跟随实时缩放：`XamlRoot.Changed` 里的 `RasterizationScale` 变化 → 重新 `MoveAndResize`（XAML 自己会重排，但窗口的像素尺寸不会变）；
+- 调试：`%LOCALAPPDATA%\TBox\app.log` 里收起日志带 `size=..×.. scale=..`，可直接核对像素尺寸是否等于 DIP × scale。
+
 ## 6. 对话框
 
 早期用 `ContentDialog`，遇到两个问题：
@@ -173,6 +190,7 @@ return term.Split(' ').All(t => haystack.Contains(t, OrdinalIgnoreCase));
 | 第二个窗口导致栈溢出 | 原 WndProc 存在静态字段 | 按 HWND 分别保存 |
 | 独立窗口秒关 | Window 对象被 GC | 静态列表持有 |
 | 搜索框文字贴顶 | `PlaceholderText` 不受 Padding 影响 | 自绘底部占位 TextBlock |
+| 高缩放屏上胶囊被裁一半 | XAML 常量是 DIP，却被直接当物理像素传给 `MoveAndResize`（150%/200% 时窗口只有实际所需的一半） | 常量全部按 DIP 书写，经 `Dpi.Px(值, ScaleFor(hwnd))` 换算后再给 `MoveAndResize`/命中测试（§5.1） |
 
 ## 12. 构建与发布
 

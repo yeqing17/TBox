@@ -119,10 +119,12 @@ public sealed partial class MainWindow : Window
         }
 
         var placement = DataStore.Instance.Data.Window;
-        var width = placement.Width > 320 ? (int)placement.Width : 760;
-        var height = placement.Height > 240 ? (int)placement.Height : 520;
-        var x = placement.X is double px ? (int)px : 200;
-        var y = placement.Y is double py ? (int)py : 160;
+        // Saved placement is physical pixels; the fallbacks are design DIPs and have to be scaled.
+        var scale = Dpi.ScaleFor(_hwnd);
+        var width = placement.Width > 320 ? (int)placement.Width : Dpi.Px(760, scale);
+        var height = placement.Height > 240 ? (int)placement.Height : Dpi.Px(520, scale);
+        var x = placement.X is double px ? (int)px : Dpi.Px(200, scale);
+        var y = placement.Y is double py ? (int)py : Dpi.Px(160, scale);
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
     }
 
@@ -719,7 +721,7 @@ public sealed partial class MainWindow : Window
         if (IsDocked)
         {
             Data.Settings.Dock = DockSide.None;
-            Data.Settings.DockWidth = Math.Max(360, Data.Window.Width);
+            Data.Settings.DockWidth = Math.Max(Dpi.Px(360, Dpi.ScaleFor(_hwnd)), Data.Window.Width);
             _store.MarkDirty();
             StopDockPolling();
             if (_collapsed) ShowExpanded();
@@ -735,9 +737,10 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            var scale = Dpi.ScaleFor(_hwnd);
             _appWindow.Move(new PointInt32(
-                Data.Window.X is double x ? (int)x : 200,
-                Data.Window.Y is double y ? (int)y : 160));
+                Data.Window.X is double x ? (int)x : Dpi.Px(200, scale),
+                Data.Window.Y is double y ? (int)y : Dpi.Px(160, scale)));
         }
 
         WindowChrome.KeepAtBottom = true;
@@ -990,8 +993,11 @@ public sealed partial class MainWindow : Window
         if (!_resizing) return;
 
         GetCursorPos(out var cursor);
-        var width = Math.Max(360, _dragWindowStart.Right - _dragWindowStart.Left + (cursor.X - _dragCursorStart.X));
-        var height = Math.Max(240, _dragWindowStart.Bottom - _dragWindowStart.Top + (cursor.Y - _dragCursorStart.Y));
+        // Both the grip deltas and the minimum size are physical pixels here: the drag maths works on
+        // the window rect, so the DIP minimum has to be converted first.
+        var scale = Dpi.ScaleFor(_hwnd);
+        var width = Math.Max(Dpi.Px(360, scale), _dragWindowStart.Right - _dragWindowStart.Left + (cursor.X - _dragCursorStart.X));
+        var height = Math.Max(Dpi.Px(240, scale), _dragWindowStart.Bottom - _dragWindowStart.Top + (cursor.Y - _dragCursorStart.Y));
 
         SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         e.Handled = true;

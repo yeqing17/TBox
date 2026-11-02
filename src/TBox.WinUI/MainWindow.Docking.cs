@@ -20,6 +20,9 @@ namespace TBox;
 /// </summary>
 public sealed partial class MainWindow
 {
+    // Distances below are DIPs (the design unit). Window geometry — DisplayArea.WorkArea,
+    // GetWindowRect, GetCursorPos, AppWindow.MoveAndResize — is physical pixels, so these go through
+    // Dip() before they meet a pixel.
     private const int SnapDistance = 16;
     private const int DockPollMs = 50;
     private const int MinExpandedWidth = 360;
@@ -43,6 +46,12 @@ public sealed partial class MainWindow
     private bool IsDocked => CurrentDock != DockSide.None;
     private bool UseCapsule => Data.Settings.CollapsedStyle == CollapsedStyle.Capsule;
 
+    /// <summary>DPI scale of the monitor the panel is on (1.0 = 100%, 2.0 = 200%…).</summary>
+    private double Scale => Dpi.ScaleFor(_hwnd);
+
+    /// <summary>A design DIP length as physical pixels on the panel's current monitor.</summary>
+    private int Dip(double value) => Dpi.Px(value, Scale);
+
     private void InitDocking()
     {
         _dockTimer = DispatcherQueue.CreateTimer();
@@ -59,9 +68,10 @@ public sealed partial class MainWindow
     private int StripParkedX(int width)
     {
         var area = WorkArea();
+        var strip = Dip(StripVisibleWidth);
         return CurrentDock == DockSide.Right
-            ? area.X + area.Width - StripVisibleWidth
-            : area.X - width + StripVisibleWidth;
+            ? area.X + area.Width - strip
+            : area.X - width + strip;
     }
 
     private void ShowCollapsedBar(bool visible)
@@ -99,9 +109,10 @@ public sealed partial class MainWindow
     {
         var area = WorkArea();
         var rightEdge = area.X + area.Width;
+        var snap = Dip(SnapDistance);
 
-        var nearLeft = rect.Left <= area.X + SnapDistance;
-        var nearRight = rect.Right >= rightEdge - SnapDistance;
+        var nearLeft = rect.Left <= area.X + snap;
+        var nearRight = rect.Right >= rightEdge - snap;
 
         if (nearLeft && nearRight)
             return Math.Abs(rect.Left - area.X) <= Math.Abs(rect.Right - rightEdge) ? DockSide.Left : DockSide.Right;
@@ -182,9 +193,9 @@ public sealed partial class MainWindow
         if (forceRight) Data.Settings.Dock = DockSide.Right;
         if (!IsDocked) return;
 
-        var width = (int)Math.Max(MinExpandedWidth, Data.Settings.DockWidth);
-        var height = (int)(Data.Window.Height > 200 ? Data.Window.Height : 540);
-        var y = (int)(Data.Window.Y ?? 120);
+        var width = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
+        var height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        var y = (int)(Data.Window.Y ?? Dip(120));
 
         Data.Settings.DockWidth = width;
         SetDockedTopmost(true);
@@ -244,7 +255,8 @@ public sealed partial class MainWindow
                 }
 
                 var cap = _capsule.GetRect();
-                var tabTop = cap.Y + cap.Height - CapsuleWindow.ExpandTabHeight;
+                // GetRect/cursor are physical pixels, so the tab band must be physical too.
+                var tabTop = cap.Y + cap.Height - _capsule.ExpandTabPixels;
                 var inTab = cursor.X >= cap.X - 2 && cursor.X <= cap.X + cap.Width + 2
                             && cursor.Y >= tabTop && cursor.Y <= cap.Y + cap.Height + 2;
 
@@ -267,8 +279,9 @@ public sealed partial class MainWindow
             }
 
             GetWindowRect(_hwnd, out var parked);
-            var stripLeft = CurrentDock == DockSide.Right ? parked.Left : parked.Right - StripVisibleWidth;
-            var stripRight = CurrentDock == DockSide.Right ? parked.Left + StripVisibleWidth : parked.Right;
+            var strip = Dip(StripVisibleWidth);
+            var stripLeft = CurrentDock == DockSide.Right ? parked.Left : parked.Right - strip;
+            var stripRight = CurrentDock == DockSide.Right ? parked.Left + strip : parked.Right;
             var inStrip = cursor.X >= stripLeft - 2 && cursor.X <= stripRight + 2
                           && cursor.Y >= parked.Top - 2 && cursor.Y <= parked.Bottom + 2;
 
@@ -339,9 +352,9 @@ public sealed partial class MainWindow
 
         _collapsed = false;
 
-        var width = (int)Math.Max(MinExpandedWidth, Data.Settings.DockWidth);
-        int height = (int)(Data.Window.Height > 200 ? Data.Window.Height : 540);
-        int y = (int)(Data.Window.Y ?? 120);
+        var width = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
+        int height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        int y = (int)(Data.Window.Y ?? Dip(120));
 
         if (UseCapsule) _capsule?.Hide();
         else ShowCollapsedBar(false);
@@ -366,14 +379,17 @@ public sealed partial class MainWindow
         _collapsed = true;
 
         var area = WorkArea();
-        int width = (int)Math.Max(MinExpandedWidth, Data.Settings.DockWidth);
-        int height = (int)(Data.Window.Height > 200 ? Data.Window.Height : 540);
-        int y = (int)(Data.Window.Y ?? area.Y + 120);
+        int width = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
+        int height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        int y = (int)(Data.Window.Y ?? area.Y + Dip(120));
 
         if (UseCapsule)
         {
             var capsule = EnsureCapsule();
             capsule.Update((_currentGroup?.Items ?? new System.Collections.ObjectModel.ObservableCollection<AppItem>()).ToList());
+
+            // The capsule is a window sized in physical pixels; hand it the panel's DPI scale first.
+            capsule.SetScale(Scale);
 
             if (animate) await SlideToAsync(ExpandedX(width), ParkedX(width), y, width, height);
 
@@ -381,14 +397,16 @@ public sealed partial class MainWindow
             ShowCollapsedBar(false);
             MoveTo(ParkedX(width), y, width, height);
 
+            var gap = Dip(CapsuleGap);
             var capsuleX = CurrentDock == DockSide.Right
-                ? area.X + area.Width - CapsuleWindow.Width - CapsuleGap
-                : area.X + CapsuleGap;
-            var capsuleY = y + (height - capsule.CurrentHeight) / 2;
-            capsuleY = Math.Clamp(capsuleY, area.Y, area.Y + area.Height - capsule.CurrentHeight);
+                ? area.X + area.Width - capsule.PixelWidth - gap
+                : area.X + gap;
+            var capsuleY = y + (height - capsule.PixelHeight) / 2;
+            capsuleY = Math.Clamp(capsuleY, area.Y,
+                Math.Max(area.Y, area.Y + area.Height - capsule.PixelHeight));
 
             capsule.ShowAt(capsuleX, capsuleY);
-            App.Log($"[dock] collapsed capsule at {capsuleX},{capsuleY}");
+            App.Log($"[dock] collapsed capsule at {capsuleX},{capsuleY} size={capsule.PixelWidth}x{capsule.PixelHeight} scale={Scale:0.##}");
             return;
         }
 

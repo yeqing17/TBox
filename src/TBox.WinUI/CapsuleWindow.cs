@@ -17,6 +17,8 @@ namespace TBox;
 /// </summary>
 internal sealed class CapsuleWindow
 {
+    // Every length below is a XAML DIP. The window itself is sized in physical pixels, so they are
+    // multiplied by the monitor's scale factor (SetScale) before they reach AppWindow.
     public const int Width = 56;
     private const int IconSize = 34;
     private const int IconGap = 6;
@@ -31,13 +33,44 @@ internal sealed class CapsuleWindow
     private readonly Border _expandStrip;
     private bool _hovered;
     private readonly Border? _root;
+    private double _scale = 1.0;
 
 
     public IntPtr Handle { get; }
     public Action? ExpandRequested { get; set; }
     public Action<AppItem>? ItemActivated { get; set; }
 
-    public int CurrentHeight { get; private set; } = 120;
+    /// <summary>Height the content needs, in DIPs.</summary>
+    public int ContentHeight { get; private set; } = 120;
+
+    /// <summary>Window width in physical pixels at the current DPI scale.</summary>
+    public int PixelWidth => Dpi.Px(Width, _scale);
+
+    /// <summary>Window height in physical pixels at the current DPI scale.</summary>
+    public int PixelHeight => Dpi.Px(ContentHeight, _scale);
+
+    /// <summary>
+    /// Height of the bottom expand tab in physical pixels. Hit testing compares it against
+    /// GetWindowRect / GetCursorPos, which are physical, so it must not stay in DIPs.
+    /// </summary>
+    public int ExpandTabPixels => Dpi.Px(ExpandTabHeight, _scale);
+
+    /// <summary>
+    /// Set the monitor's DPI scale before reading <see cref="PixelWidth"/>/<see cref="PixelHeight"/>.
+    /// If the capsule is already on screen the window is resized in place, so a live display-scale
+    /// change does not leave the content clipped until the next collapse.
+    /// </summary>
+    public void SetScale(double scale)
+    {
+        if (scale <= 0) scale = 1.0;
+        if (Math.Abs(scale - _scale) < 0.001) return;
+
+        _scale = scale;
+        if (!IsVisible) return;
+
+        var pos = _window.AppWindow.Position;
+        _window.AppWindow.MoveAndResize(new RectInt32(pos.X, pos.Y, PixelWidth, PixelHeight));
+    }
 
     public CapsuleWindow()
     {
@@ -121,7 +154,16 @@ internal sealed class CapsuleWindow
         _window.Content = root;
         _window.SystemBackdrop = new DesktopAcrylicBackdrop();
 
+        // Follow live DPI changes (display-scale slider, moving to a monitor with another scale):
+        // the XAML content rescales by itself, but the window's pixel size does not.
+        root.Loaded += (_, _) =>
+        {
+            if (root.XamlRoot is { } xamlRoot)
+                xamlRoot.Changed += (sender, _) => SetScale(sender.RasterizationScale);
+        };
+
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(_window);
+        _scale = Dpi.ScaleFor(Handle);
 
         if (_window.AppWindow.Presenter is OverlappedPresenter presenter)
         {
@@ -143,7 +185,7 @@ internal sealed class CapsuleWindow
         if (shown.Count == 0)
         {
             _stack.Children.Add(_mark);
-            CurrentHeight = IconSize + PaddingY * 2 + 32 + ExpandStripHeight;
+            ContentHeight = IconSize + PaddingY * 2 + 32 + ExpandStripHeight;
             return;
         }
 
@@ -176,12 +218,14 @@ internal sealed class CapsuleWindow
             _stack.Children.Add(tile);
         }
 
-        CurrentHeight = PaddingY * 2 + shown.Count * (IconSize + 4) + (shown.Count - 1) * IconGap + ExpandStripHeight + 14;
+        ContentHeight = PaddingY * 2 + shown.Count * (IconSize + 4) + (shown.Count - 1) * IconGap + ExpandStripHeight + 14;
     }
 
     public void ShowAt(int x, int y)
     {
-        _window.AppWindow.MoveAndResize(new RectInt32(x, y, Width, CurrentHeight));
+        // PixelWidth/PixelHeight, not Width/ContentHeight: the window is in physical pixels while the
+        // content inside it is laid out in DIPs.
+        _window.AppWindow.MoveAndResize(new RectInt32(x, y, PixelWidth, PixelHeight));
         _window.AppWindow.Show();
 
         NativeMethods.SetWindowPos(Handle, new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0,

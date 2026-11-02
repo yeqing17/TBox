@@ -21,6 +21,7 @@ internal sealed class DialogWindow
 
     private readonly Window _window;
     private readonly TaskCompletionSource<bool> _completion = new();
+    private readonly double _contentHeight;
     private bool _completed;
 
     public DialogWindow(string title, UIElement content, double height,
@@ -93,6 +94,15 @@ internal sealed class DialogWindow
         _window.Content = root;
         _window.SystemBackdrop = new DesktopAcrylicBackdrop();
 
+        // The dialog is deliberately window-sized (not content-sized), so its physical size has to
+        // follow the monitor DPI — the XAML inside is laid out in DIPs.
+        _contentHeight = height;
+        root.Loaded += (_, _) =>
+        {
+            if (root.XamlRoot is { } xamlRoot)
+                xamlRoot.Changed += (sender, _) => ApplySize(sender.RasterizationScale);
+        };
+
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(_window);
         if (_window.AppWindow.Presenter is OverlappedPresenter presenter)
         {
@@ -103,7 +113,7 @@ internal sealed class DialogWindow
         WindowChrome.RemoveNonClientFrame(hwnd);
         DwmChrome.ApplyBorderless(hwnd);
 
-        _window.AppWindow.MoveAndResize(new RectInt32(0, 0, 480, (int)height));
+        ApplySize(Dpi.ScaleFor(hwnd));
         _window.Closed += (_, _) =>
         {
             Open.Remove(this);
@@ -111,6 +121,18 @@ internal sealed class DialogWindow
         };
 
         Open.Add(this);
+    }
+
+    /// <summary>Resizes the window for a DPI scale, keeping its current spot once it is on screen.</summary>
+    private void ApplySize(double scale)
+    {
+        var visible = _window.AppWindow.IsVisible;
+        var pos = _window.AppWindow.Position;
+        _window.AppWindow.MoveAndResize(new RectInt32(
+            visible ? pos.X : 0,
+            visible ? pos.Y : 0,
+            Dpi.Px(480, scale),
+            Dpi.Px(_contentHeight, scale)));
     }
 
     public Task<bool> ShowAsync(Window? owner)
