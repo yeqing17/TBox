@@ -47,7 +47,25 @@ public sealed partial class MainWindow : Window
         // AppWindow becomes null once the window is re-parented into the desktop layer, so keep it.
         _appWindow = AppWindow;
         if (!AppEnv.Opaque) SystemBackdrop = new DesktopAcrylicBackdrop();
+
+        // Everything that affects the first frame runs before App.OnLaunched calls Activate().
+        // Loading the store after the window is visible is what made it appear at the default
+        // placement for a moment and then jump to the saved/fitted one.
+        _store.Load();
+        AppTheme.Resolve(Data.Settings.Theme);
+        Root.RequestedTheme = AppTheme.Current;
+        App.Log($"[win] store loaded, groups={Data.Groups.Count} theme={AppTheme.Current}");
+
         ConfigureWindow();
+        EnsureChrome();
+        ApplyShape();
+
+        Tabs.ItemsSource = Data.Groups;
+        _currentGroup = Data.Groups.FirstOrDefault(g => g.Id == Data.Settings.LastGroupId)
+                        ?? Data.Groups.FirstOrDefault();
+        Tabs.SelectedItem = _currentGroup;
+        RefreshView();
+
         Activated += OnFirstActivated;
         Activated += OnWindowActivated;
         Closed += (_, _) =>
@@ -56,17 +74,52 @@ public sealed partial class MainWindow : Window
             {
                 Data.Window.X = rect.Left;
                 Data.Window.Y = rect.Top;
-                Data.Window.Width = rect.Right - rect.Left;
-                Data.Window.Height = rect.Bottom - rect.Top;
+                // Auto-fit sizes are derived from the group; keep the preferred size the user set
+                // so the feature can be switched off without the window staying shrunk.
+                if (!AutoFitEnabled)
+                {
+                    Data.Window.Width = rect.Right - rect.Left;
+                    Data.Window.Height = rect.Bottom - rect.Top;
+                }
             }
 
             _store.SaveNow();
             _shell?.Dispose();
         };
 
-        if (Content is FrameworkElement root) root.KeyDown += OnRootKeyDown;
+        if (Content is FrameworkElement root)
+        {
+            root.KeyDown += OnRootKeyDown;
+            root.Loaded += (_, _) => ApplyShape();
+        }
 
         InitDocking();
+
+        var cmdArgs = Environment.GetCommandLineArgs();
+        ApplyDockOnStartup(forceRight: cmdArgs.Any(a => a.Equals("--dock-right", StringComparison.OrdinalIgnoreCase)));
+
+        var flyout = cmdArgs.Any(a => a.Equals("--flyout", StringComparison.OrdinalIgnoreCase));
+        if (flyout && !IsDocked)
+        {
+            _mode = PanelMode.Flyout;
+            WindowChrome.KeepAtBottom = false;
+            if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = true;
+        }
+        else if (!IsDocked)
+        {
+            _mode = PanelMode.Desktop;
+            WindowChrome.KeepAtBottom = true;
+            SetWindowPos(_hwnd, new IntPtr(1) /* HWND_BOTTOM */, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
+        _autoFitReady = true;
+        _autoFitScale = Scale;
+        ApplyAutoFit();
+
+        if (flyout && !IsDocked) PositionNearTray();
+
+        App.Log($"[win] hwnd=0x{_hwnd:X}");
     }
 
     /// <summary>
@@ -138,42 +191,25 @@ public sealed partial class MainWindow : Window
         if (_initialized) return;
         _initialized = true;
 
-        await Task.Delay(400);
-
-        _store.Load();
-        AppTheme.Resolve(Data.Settings.Theme);
-        Root.RequestedTheme = AppTheme.Current;
-        App.Log($"[win] store loaded, groups={Data.Groups.Count} theme={AppTheme.Current}");
-
-        Tabs.ItemsSource = Data.Groups;
-        _currentGroup = Data.Groups.FirstOrDefault(g => g.Id == Data.Settings.LastGroupId)
-                        ?? Data.Groups.FirstOrDefault();
-        Tabs.SelectedItem = _currentGroup;
-
-        RefreshView();
-
-        WindowChrome.KeepAtBottom = true;
-        _mode = PanelMode.Desktop;
-        SetWindowPos(_hwnd, new IntPtr(1) /* HWND_BOTTOM */, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-        App.Log($"[win] hwnd=0x{_hwnd:X}");
+        // Data, theme, tabs and placement were prepared in the constructor before the first frame;
+        // activation only sets up system integration and re-asserts the chrome.
+        App.Log("[win] activated");
 
         if (_store.LoadWarning is { Length: > 0 } warning)
             _ = ShowMessageAsync("数据读取失败", warning);
 
         InitShellHost();
         EnsureChrome();
-
-        await Task.Delay(600);
         ApplyShape();
 
+        if (Root.XamlRoot is { } autoFitRoot)
+            autoFitRoot.Changed += (_, _) => OnAutoFitScaleChanged(autoFitRoot.RasterizationScale);
+
         var cmdArgs = Environment.GetCommandLineArgs();
-        ApplyDockOnStartup(forceRight: cmdArgs.Any(a => a.Equals("--dock-right", StringComparison.OrdinalIgnoreCase)));
 
         if (cmdArgs.Any(a => a.Equals("--settings", StringComparison.OrdinalIgnoreCase)))
         {
-            await Task.Delay(800);
+            await Task.Delay(300);
             OnSettingsClick(this, new RoutedEventArgs());
         }
 
@@ -181,9 +217,6 @@ public sealed partial class MainWindow : Window
         {
             ShowFlyout();
         }
-
-
-        Root.Loaded += (_, _) => ApplyShape();
     }
 
     private void InitShellHost()
@@ -296,6 +329,10 @@ public sealed partial class MainWindow : Window
             : $"{total} 个工具";
 
         foreach (var group in Data.Groups) group.RefreshCount();
+
+        // Not while filtering: resizing on every keystroke would make the search box jump around.
+        if (_autoFitReady && _filter.Length == 0) ApplyAutoFit();
+
         _ = LoadIconsAsync(items.ToList());
     }
 
@@ -824,6 +861,51 @@ public sealed partial class MainWindow : Window
             IsChecked = Data.Settings.CollapsedStyle == CollapsedStyle.Strip
         };
 
+        var autoFit = new ToggleSwitch
+        {
+            IsOn = Data.Settings.AutoFitWindow,
+            Header = "随图标数量自适应窗口大小",
+            OnContent = "开",
+            OffContent = "关"
+        };
+
+        var maxRows = new ComboBox
+        {
+            Width = 88,
+            ItemsSource = Enumerable.Range(1, 8).ToList(),
+            SelectedItem = Math.Clamp(Data.Settings.AutoFitMaxRows, 1, 8),
+            IsEnabled = autoFit.IsOn
+        };
+
+        var maxRowsRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        maxRowsRow.Children.Add(new TextBlock
+        {
+            Text = "最多行数",
+            FontSize = 12,
+            Opacity = 0.75,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        maxRowsRow.Children.Add(maxRows);
+
+        var fitHint = new TextBlock
+        {
+            Text = "窗口最多显示这么多行；图标更多时先加宽窗口，再改为滚动。",
+            FontSize = 11.5,
+            Opacity = 0.55,
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        autoFit.Toggled += (_, _) =>
+        {
+            maxRows.IsEnabled = autoFit.IsOn;
+            fitHint.Opacity = autoFit.IsOn ? 0.55 : 0.3;
+        };
+
         var startup = new ToggleSwitch
         {
             IsOn = StartupEntry.IsEnabled(),
@@ -854,6 +936,11 @@ public sealed partial class MainWindow : Window
             Opacity = 0.7
         };
 
+        var assemblyVersion = typeof(MainWindow).Assembly.GetName().Version;
+        var versionText = assemblyVersion is null
+            ? "TBox · WinUI 3"
+            : $"TBox {assemblyVersion.Major}.{assemblyVersion.Minor}.{assemblyVersion.Build} · WinUI 3";
+
         var panel = new StackPanel { Spacing = 6 };
         panel.Children.Add(Header("主题"));
         panel.Children.Add(themeSystem);
@@ -862,6 +949,10 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(Header("收起形态"));
         panel.Children.Add(capsule);
         panel.Children.Add(strip);
+        panel.Children.Add(Header("窗口"));
+        panel.Children.Add(autoFit);
+        panel.Children.Add(maxRowsRow);
+        panel.Children.Add(fitHint);
         panel.Children.Add(new Border { Height = 10 });
         panel.Children.Add(startup);
         panel.Children.Add(Header("快捷键"));
@@ -870,14 +961,27 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(pathText);
         panel.Children.Add(openFolder);
         panel.Children.Add(Header("版本"));
-        panel.Children.Add(new TextBlock { Text = "TBox 2.0.0 · WinUI 3", FontSize = 12, Opacity = 0.7 });
+        panel.Children.Add(new TextBlock { Text = versionText, FontSize = 12, Opacity = 0.7 });
 
-        if (!await ShowDialogAsync("设置", panel, 520, "保存", "取消")) return;
+        if (!await ShowDialogAsync("设置", panel, 600, "保存", "取消")) return;
 
         Data.Settings.Theme = themeDark.IsChecked == true ? ThemeMode.Dark
             : themeLight.IsChecked == true ? ThemeMode.Light
             : ThemeMode.System;
         ApplyTheme();
+
+        var autoFitWasOn = Data.Settings.AutoFitWindow;
+        var maxRowsValue = maxRows.SelectedItem is int rows
+            ? Math.Clamp(rows, 1, 8)
+            : Data.Settings.AutoFitMaxRows;
+        var autoFitChanged = autoFit.IsOn != autoFitWasOn || maxRowsValue != Data.Settings.AutoFitMaxRows;
+
+        Data.Settings.AutoFitWindow = autoFit.IsOn;
+        Data.Settings.AutoFitMaxRows = maxRowsValue;
+
+        // Re-fit before a possible collapse, so the dock transition already uses the new height.
+        if (!autoFit.IsOn && autoFitWasOn) RestorePreferredSize();
+        else if (autoFit.IsOn && autoFitChanged) ApplyAutoFit();
 
         var nextStyle = capsule.IsChecked == true ? CollapsedStyle.Capsule : CollapsedStyle.Strip;
         if (nextStyle != Data.Settings.CollapsedStyle) SetCollapsedStyle(nextStyle);

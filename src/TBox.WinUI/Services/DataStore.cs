@@ -106,6 +106,9 @@ public sealed class DataStore
         Data.Window ??= new WindowPlacement();
         Data.Groups ??= new();
 
+        // Hand-edited JSON must not produce a zero-row or absurdly tall fit.
+        Data.Settings.AutoFitMaxRows = Math.Clamp(Data.Settings.AutoFitMaxRows, 1, 8);
+
         foreach (var group in Data.Groups)
         {
             if (string.IsNullOrWhiteSpace(group.Id)) group.Id = ItemGroup.NewId();

@@ -56,6 +56,12 @@ public sealed class AppSettings
 
     /// <summary>How a docked panel presents itself while collapsed.</summary>
     public CollapsedStyle CollapsedStyle { get; set; } = CollapsedStyle.Capsule;
+
+    /// <summary>Resize the panel to the current group's icon count instead of a fixed window size.</summary>
+    public bool AutoFitWindow { get; set; } = true;
+
+    /// <summary>Row cap for auto-fit; beyond it the window stops growing and the grid scrolls.</summary>
+    public int AutoFitMaxRows { get; set; } = 4;
 }
 
 public sealed class WindowPlacement

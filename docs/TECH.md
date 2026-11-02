@@ -1,6 +1,6 @@
 # TBox 技术方案
 
-> v2.0.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-02
+> v2.1.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-03
 
 ## 1. 结论先行
 
@@ -26,6 +26,7 @@ src/TBox.WinUI/
 ├─ App.xaml(.cs)              组合根：单实例、加载数据、应用主题、创建主窗口
 ├─ MainWindow.xaml(.cs)       面板 UI：标题栏、标签、卡片、搜索、右键菜单、对话框
 ├─ MainWindow.Docking.cs      贴边 / 胶囊 / 竖条 状态机（partial）
+├─ MainWindow.AutoFit.cs      按图标数量计算窗口尺寸（partial）
 ├─ CapsuleWindow.cs           胶囊窗口（独立顶层窗口，承载快捷图标）
 ├─ Views/DialogWindow.cs      通用对话框窗口（设置/输入/导入/确认）
 ├─ Models/AppModels.cs        数据模型 + 搜索匹配
@@ -123,9 +124,27 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 
 - 常量按 DIP 书写，交给上面右列之前一律过 `Dpi.Px(值, Dpi.ScaleFor(hwnd))`；反查用 `Dpi.Dip(px, scale)`；
 - 命中测试两边都用物理像素：如展开条带宽用 `CapsuleWindow.ExpandTabPixels`（= DIP × scale），不要直接拿 38 去和 `GetWindowRect` 比；
-- 窗口像素尺寸是**用户数据**（`data.json` 的 `window.width/height`、`dockWidth`），只在与最小尺寸比较时换成 DIP 下限；
+- 窗口像素尺寸是**用户数据**（`data.json` 的 `window.width/height`、`dockWidth`），只在与最小尺寸比较时换成 DIP 下限；自适应尺寸只在运行时生效，不写回这对偏好值（§5.2）；
 - 跟随实时缩放：`XamlRoot.Changed` 里的 `RasterizationScale` 变化 → 重新 `MoveAndResize`（XAML 自己会重排，但窗口的像素尺寸不会变）；
 - 调试：`%LOCALAPPDATA%\TBox\app.log` 里收起日志带 `size=..×.. scale=..`，可直接核对像素尺寸是否等于 DIP × scale。
+
+### 5.2 自适应尺寸
+
+`MainWindow.AutoFit.cs` 在启动、切换分组、增删/导入/移动工具、清空搜索和保存设置后重算窗口尺寸。
+公式全部按 DIP 书写，最后过 `Dpi.Px`：
+
+- 图标格 96、GridView 横向内边距 16（10+6）、固定 chrome 126（46 标题 + 42 分组 + 28 状态 + 上下内边距 10）；
+- 宽度 = `16 + 96 × 列数`，高度 = `126 + 96 × 行数`；
+- 列数从 `min(图标数, 4)` 起；行数超过“最大行数”时先加列：悬浮最多 8 列（784 DIP），贴边最多到贴边宽度能放下的列数。仍超出则高度封顶，GridView 内部滚动；
+- 悬浮和贴边时宽度都随列数变化（360–784），贴边面板仍贴住屏幕边缘；`dockWidth` 只在关闭自适应时作为恢复宽度；
+- 空分组用 360×320 容纳空状态；有图标时高度按可见行数精确计算（1 行 = 222 DIP），不留半行。
+
+两个关键约束：
+
+- **自动适配不写回 `window.width/height`**：它们仍是用户手动拖拽出的偏好尺寸，只用于关闭自适应时恢复窗口，不再作为自适应宽度的上限；`dockWidth` 同样只在关闭自适应时作为贴边恢复宽度。`Closing` 和标题栏拖动结束时在自适应开启下跳过尺寸写回；
+- **搜索输入过程中不触发**：每敲一个字就改窗口尺寸会打断输入；清空搜索后由 `RefreshView` 重新贴合。
+
+日志里 `[fit] items=.. cols=.. rows=../.. maxRows=.. -> WxHpx` 可直接核对列数、行数和像素尺寸。
 
 ## 6. 对话框
 
@@ -191,6 +210,7 @@ return term.Split(' ').All(t => haystack.Contains(t, OrdinalIgnoreCase));
 | 独立窗口秒关 | Window 对象被 GC | 静态列表持有 |
 | 搜索框文字贴顶 | `PlaceholderText` 不受 Padding 影响 | 自绘底部占位 TextBlock |
 | 高缩放屏上胶囊被裁一半 | XAML 常量是 DIP，却被直接当物理像素传给 `MoveAndResize`（150%/200% 时窗口只有实际所需的一半） | 常量全部按 DIP 书写，经 `Dpi.Px(值, ScaleFor(hwnd))` 换算后再给 `MoveAndResize`/命中测试（§5.1） |
+| 启动先闪一个默认窗口再跳到正确位置 | 窗口先 `Activate`，400ms 后才加载 store 并重新定位/改尺寸 | 数据加载、主题、Tabs/图标、贴边或自适应定位、无边框 chrome 全部放到构造函数里，`Activate` 之前就是最终状态 |
 
 ## 12. 构建与发布
 

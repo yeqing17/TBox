@@ -161,9 +161,15 @@ public sealed partial class MainWindow
 
         Data.Settings.Dock = side;
         Data.Window.Y = rect.Top;
-        Data.Window.Height = height;
-        Data.Window.Width = width;
-        if (side != DockSide.None) Data.Settings.DockWidth = width;
+        // Auto-fit derives the size from the icon count on every update. Keep the user's preferred
+        // width/height untouched so turning the feature off restores them. DockWidth is only the
+        // auto-fit-off restore width, so it must not be overwritten with a content-fit size.
+        if (!AutoFitEnabled)
+        {
+            Data.Window.Height = height;
+            Data.Window.Width = width;
+            if (side != DockSide.None) Data.Settings.DockWidth = width;
+        }
         Data.Window.X = side switch
         {
             DockSide.Left => area.X,
@@ -193,11 +199,11 @@ public sealed partial class MainWindow
         if (forceRight) Data.Settings.Dock = DockSide.Right;
         if (!IsDocked) return;
 
-        var width = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
-        var height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        var dockWidth = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
+        Data.Settings.DockWidth = dockWidth;
+        var (width, height) = ExpandedSizePx();
         var y = (int)(Data.Window.Y ?? Dip(120));
 
-        Data.Settings.DockWidth = width;
         SetDockedTopmost(true);
         PlaceAtEdge(width, y, height);
 
@@ -352,8 +358,7 @@ public sealed partial class MainWindow
 
         _collapsed = false;
 
-        var width = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
-        int height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        var (width, height) = ExpandedSizePx();
         int y = (int)(Data.Window.Y ?? Dip(120));
 
         if (UseCapsule) _capsule?.Hide();
@@ -379,8 +384,7 @@ public sealed partial class MainWindow
         _collapsed = true;
 
         var area = WorkArea();
-        int width = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
-        int height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        var (width, height) = ExpandedSizePx();
         int y = (int)(Data.Window.Y ?? area.Y + Dip(120));
 
         if (UseCapsule)
