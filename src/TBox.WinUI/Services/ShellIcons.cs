@@ -117,7 +117,8 @@ public static class ShellIcons
             var shfi = new SHFILEINFO();
             var result = SHGetFileInfo(path, 0, ref shfi, (uint)Marshal.SizeOf<SHFILEINFO>(),
                 SHGFI_SYSICONINDEX | SHGFI_LARGEICON);
-            if (result != IntPtr.Zero && shfi.iIcon > 0)
+            // Index 0 is a valid (generic) icon; only a failed SHGetFileInfo disqualifies.
+            if (result != IntPtr.Zero && shfi.iIcon >= 0)
             {
                 foreach (var listType in new[] { SHIL_JUMBO, SHIL_EXTRALARGE, SHIL_LARGE })
                 {

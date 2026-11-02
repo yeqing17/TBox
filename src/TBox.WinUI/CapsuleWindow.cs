@@ -173,6 +173,8 @@ internal sealed class CapsuleWindow
 
         WindowChrome.RemoveNonClientFrame(Handle);
         DwmChrome.ApplyBorderless(Handle);
+        _hovered = true;
+        SetExpandHover(false);
         _window.AppWindow.Hide();
     }
 
@@ -238,8 +240,8 @@ internal sealed class CapsuleWindow
         if (_hovered == hovered) return;
         _hovered = hovered;
 
-        var idleBg = AppTheme.IsDark ? Color.FromArgb(38, 255, 255, 255) : Color.FromArgb(20, 0, 0, 0);
-        var idleFg = AppTheme.IsDark ? Color.FromArgb(235, 255, 255, 255) : Color.FromArgb(210, 0, 0, 0);
+        var idleBg = AppTheme.IsDark ? Color.FromArgb(38, 255, 255, 255) : Color.FromArgb(26, 0, 0, 0);
+        var idleFg = AppTheme.IsDark ? Color.FromArgb(235, 255, 255, 255) : Color.FromArgb(230, 0, 0, 0);
 
         _expandStrip.Background = new SolidColorBrush(hovered
             ? Color.FromArgb(90, 0, 120, 212)

@@ -10,3 +10,6 @@ dist/
 .winui-log.txt
 *.log
 *.user
+
+# release archives built locally
+TBox-*-win-x64.zip
