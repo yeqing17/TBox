@@ -33,6 +33,7 @@
 
   <ItemGroup>
     <Content Include="Assets\tbox.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\tbox-512.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

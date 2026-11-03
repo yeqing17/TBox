@@ -140,6 +140,7 @@ TBox\
 │  ├─ PRD.md                产品需求文档
 │  ├─ TECH.md               技术方案、关键实现与踩坑记录
 │  ├─ RESEARCH-MULTI-BOX.md 多盒子/多胶囊预研
+│  ├─ logo\                 图标原图与生成产物
 │  └─ images\               截图
 ├─ src\TBox.WinUI\          应用主体（WinUI 3）
 │  ├─ MainWindow.xaml       面板 UI
@@ -170,3 +171,4 @@ TBox\
 - [产品需求文档（PRD）](docs/PRD.md)
 - [技术方案](docs/TECH.md)
 - [多盒子/多胶囊预研](docs/RESEARCH-MULTI-BOX.md)
+- [Logo 资产存档](docs/logo/README.md)

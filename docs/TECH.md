@@ -35,6 +35,7 @@ src/TBox.WinUI/
 │  ├─ ShellIcons.cs           256px 图标提取 + PNG 缓存
 │  ├─ Shortcuts.cs            .lnk 解析 / 桌面枚举
 │  ├─ Launcher.cs             启动语义 / 管理员 / 定位 / 开机自启
+│  ├─ AppLogo.cs              标题栏/空胶囊共享 logo
 │  └─ IconLoader.cs           缓存 PNG → BitmapImage
 ├─ Interop/
 │  ├─ NativeMethods.cs        user32 基础调用
@@ -42,7 +43,7 @@ src/TBox.WinUI/
 │  ├─ DwmChrome.cs            DWM 圆角 / 消除 1px 边框
 │  └─ ShellHost.cs            托盘图标 + 全局热键（隐藏消息窗口）
 ├─ AppTheme.cs                浅色/深色解析
-└─ Assets/tbox.ico
+└─ Assets/tbox.ico / tbox-512.png
 ```
 
 依赖方向：UI → Services/Interop → Models。

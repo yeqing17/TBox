@@ -48,6 +48,9 @@ public sealed partial class MainWindow : Window
         _appWindow = AppWindow;
         if (!AppEnv.Opaque) SystemBackdrop = new DesktopAcrylicBackdrop();
 
+        AppLogo.Load();
+        HeaderLogo.Source = AppLogo.Image;
+
         // Everything that affects the first frame runs before App.OnLaunched calls Activate().
         // Loading the store after the window is visible is what made it appear at the default
         // placement for a moment and then jump to the saved/fitted one.

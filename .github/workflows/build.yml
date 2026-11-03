@@ -61,7 +61,7 @@ jobs:
       - name: Verify payloads
         shell: pwsh
         run: |
-          $common = 'TBox.exe','resources.pri','MainWindow.xbf'
+          $common = 'TBox.exe','resources.pri','MainWindow.xbf','Assets/tbox.ico','Assets/tbox-512.png'
           $full = $common + 'WindowsAppRuntimeInstall-x64.exe','install-and-run.cmd'
           foreach ($f in $common) {
             if (-not (Test-Path "dist-lite/$f")) { throw "lite: missing $f" }

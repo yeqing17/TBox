@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using TBox.Interop;
 using TBox.Models;
+using TBox.Services;
 using Windows.Graphics;
 using Windows.UI;
 
@@ -34,7 +35,7 @@ internal sealed class CapsuleWindow
     private readonly StackPanel _stack;
     private readonly StackPanel _content;
     private readonly Border _separator;
-    private readonly Border _mark;
+    private readonly Image _mark;
     private readonly Border _expandStrip;
     private bool _hovered;
     private readonly Border? _root;
@@ -111,18 +112,12 @@ internal sealed class CapsuleWindow
             HorizontalAlignment = HorizontalAlignment.Center
         };
 
-        _mark = new Border
+        _mark = new Image
         {
             Width = IconSize,
             Height = IconSize,
-            CornerRadius = new CornerRadius(9),
-            Background = new SolidColorBrush(Color.FromArgb(255, 0, 120, 212)),
-            Child = new FontIcon
-            {
-                Glyph = "\uE7B8",
-                FontSize = 16,
-                Foreground = new SolidColorBrush(Colors.White)
-            }
+            Stretch = Stretch.Uniform,
+            Source = AppLogo.Image
         };
 
         _expandStrip = new Border
