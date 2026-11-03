@@ -19,20 +19,26 @@ internal sealed class CapsuleWindow
 {
     // Every length below is a XAML DIP. The window itself is sized in physical pixels, so they are
     // multiplied by the monitor's scale factor (SetScale) before they reach AppWindow.
-    public const int Width = 56;
+    public const int Thickness = 56;
     private const int IconSize = 34;
     private const int IconGap = 6;
     private const int PaddingY = 10;
+    private const int PaddingX = 9;
     private const int MaxItems = 3;
     public const int ExpandTabHeight = 38;
-    private const int ExpandStripHeight = 32;
+    private const int ExpandStripSize = 32;
+    private const int SeparatorSpace = 7;                  // 1px separator + 6px gap
+    private const int StripSpace = ExpandStripSize + 6;    // expand tab + its leading gap
 
     private readonly Window _window;
     private readonly StackPanel _stack;
+    private readonly StackPanel _content;
+    private readonly Border _separator;
     private readonly Border _mark;
     private readonly Border _expandStrip;
     private bool _hovered;
     private readonly Border? _root;
+    private CapsuleOrientation _orientation = CapsuleOrientation.Vertical;
     private double _scale = 1.0;
 
 
@@ -40,20 +46,41 @@ internal sealed class CapsuleWindow
     public Action? ExpandRequested { get; set; }
     public Action<AppItem>? ItemActivated { get; set; }
 
+    /// <summary>Width the content needs, in DIPs.</summary>
+    public int ContentWidth { get; private set; } = Thickness;
+
     /// <summary>Height the content needs, in DIPs.</summary>
     public int ContentHeight { get; private set; } = 120;
 
     /// <summary>Window width in physical pixels at the current DPI scale.</summary>
-    public int PixelWidth => Dpi.Px(Width, _scale);
+    public int PixelWidth => Dpi.Px(ContentWidth, _scale);
 
     /// <summary>Window height in physical pixels at the current DPI scale.</summary>
     public int PixelHeight => Dpi.Px(ContentHeight, _scale);
 
     /// <summary>
-    /// Height of the bottom expand tab in physical pixels. Hit testing compares it against
-    /// GetWindowRect / GetCursorPos, which are physical, so it must not stay in DIPs.
+    /// Short side of the expand tab in physical pixels: its height for a vertical capsule,
+    /// its width for a horizontal one. Hit testing works on physical window rects.
     /// </summary>
-    public int ExpandTabPixels => Dpi.Px(ExpandTabHeight, _scale);
+    private int ExpandTabPixels => Dpi.Px(ExpandTabHeight, _scale);
+
+    /// <summary>True when the physical cursor is over the expand tab (bottom or right edge).</summary>
+    public bool HitTestExpandTab(int x, int y)
+    {
+        if (!IsVisible) return false;
+
+        var rect = GetRect();
+        var tab = ExpandTabPixels;
+
+        if (_orientation == CapsuleOrientation.Horizontal)
+        {
+            return x >= rect.X + rect.Width - tab - 2 && x <= rect.X + rect.Width + 2
+                   && y >= rect.Y - 2 && y <= rect.Y + rect.Height + 2;
+        }
+
+        return x >= rect.X - 2 && x <= rect.X + rect.Width + 2
+               && y >= rect.Y + rect.Height - tab - 2 && y <= rect.Y + rect.Height + 2;
+    }
 
     /// <summary>
     /// Set the monitor's DPI scale before reading <see cref="PixelWidth"/>/<see cref="PixelHeight"/>.
@@ -100,13 +127,13 @@ internal sealed class CapsuleWindow
 
         _expandStrip = new Border
         {
-            Height = ExpandStripHeight,
+            Height = ExpandStripSize,
             Background = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255)),
             CornerRadius = new CornerRadius(10),
             Margin = new Thickness(5, 6, 5, 0),
             Child = new FontIcon
             {
-                Glyph = "",
+                Glyph = ExpandGlyph,
                 FontSize = 14,
                 Foreground = new SolidColorBrush(Color.FromArgb(235, 255, 255, 255))
             }
@@ -121,18 +148,20 @@ internal sealed class CapsuleWindow
         // The hover highlight is driven by the main window's timer (cursor position polling), not
         // by PointerEntered/Exited: those can miss the exit and leave the tab stuck highlighted.
 
-        var separator = new Border
+        _separator = new Border
         {
             Height = 1,
             Margin = new Thickness(10, 6, 10, 0),
             Background = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255))
         };
 
-        var content = new StackPanel
+        _content = new StackPanel
         {
             Orientation = Orientation.Vertical,
             Spacing = 0,
-            Children = { _stack, separator, _expandStrip }
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Children = { _stack, _separator, _expandStrip }
         };
 
         var root = new Border
@@ -140,7 +169,7 @@ internal sealed class CapsuleWindow
             CornerRadius = new CornerRadius(28),
             BorderThickness = new Thickness(1),
             Padding = new Thickness(0, PaddingY, 0, 6),
-            Child = content,
+            Child = _content,
             RequestedTheme = AppTheme.Current
         };
         root.Background = new SolidColorBrush(AppTheme.IsDark
@@ -179,15 +208,19 @@ internal sealed class CapsuleWindow
     }
 
     /// <summary>Rebuilds the quick-launch icons; falls back to the app mark when the box is empty.</summary>
-    public void Update(IReadOnlyList<AppItem> items)
+    public void Update(IReadOnlyList<AppItem> items, CapsuleOrientation orientation)
     {
+        ApplyOrientation(orientation);
         _stack.Children.Clear();
 
         var shown = items.Take(MaxItems).ToList();
         if (shown.Count == 0)
         {
             _stack.Children.Add(_mark);
-            ContentHeight = IconSize + PaddingY * 2 + 32 + ExpandStripHeight;
+            ContentWidth = orientation == CapsuleOrientation.Horizontal ? HorizontalWidth(1) : Thickness;
+            ContentHeight = orientation == CapsuleOrientation.Horizontal
+                ? Thickness
+                : IconSize + PaddingY * 2 + ExpandStripSize + ExpandTabHeight;
             return;
         }
 
@@ -220,8 +253,56 @@ internal sealed class CapsuleWindow
             _stack.Children.Add(tile);
         }
 
-        ContentHeight = PaddingY * 2 + shown.Count * (IconSize + 4) + (shown.Count - 1) * IconGap + ExpandStripHeight + 14;
+        ContentWidth = orientation == CapsuleOrientation.Horizontal ? HorizontalWidth(shown.Count) : Thickness;
+        ContentHeight = orientation == CapsuleOrientation.Horizontal
+            ? Thickness
+            : PaddingY * 2 + shown.Count * (IconSize + 4) + (shown.Count - 1) * IconGap + ExpandStripSize + 14;
     }
+
+    /// <summary>Re-lays out icons, separator and expand tab for a vertical or horizontal capsule.</summary>
+    private void ApplyOrientation(CapsuleOrientation orientation)
+    {
+        if (orientation == CapsuleOrientation.Auto) orientation = CapsuleOrientation.Vertical;
+        _orientation = orientation;
+
+        var horizontal = orientation == CapsuleOrientation.Horizontal;
+        _stack.Orientation = horizontal ? Orientation.Horizontal : Orientation.Vertical;
+        _content.Orientation = horizontal ? Orientation.Horizontal : Orientation.Vertical;
+
+        if (horizontal)
+        {
+            _separator.Width = 1;
+            _separator.Height = IconSize + 4;
+            _separator.Margin = new Thickness(6, 0, 0, 0);
+            _expandStrip.Width = ExpandStripSize;
+            _expandStrip.Height = IconSize + 4;
+            _expandStrip.Margin = new Thickness(6, 0, 0, 0);
+            if (_root is not null) _root.Padding = new Thickness(PaddingX, PaddingX, PaddingX, PaddingX);
+        }
+        else
+        {
+            _separator.Width = double.NaN;
+            _separator.Height = 1;
+            _separator.Margin = new Thickness(10, 6, 10, 0);
+            _expandStrip.Width = double.NaN;
+            _expandStrip.Height = ExpandStripSize;
+            _expandStrip.Margin = new Thickness(5, 6, 5, 0);
+            if (_root is not null) _root.Padding = new Thickness(0, PaddingY, 0, 6);
+        }
+
+        var idleFg = AppTheme.IsDark ? Color.FromArgb(235, 255, 255, 255) : Color.FromArgb(230, 0, 0, 0);
+        _expandStrip.Child = new FontIcon
+        {
+            Glyph = ExpandGlyph,
+            FontSize = 14,
+            Foreground = new SolidColorBrush(_hovered ? Colors.White : idleFg)
+        };
+    }
+
+    private static int HorizontalWidth(int slots)
+        => PaddingX * 2 + slots * (IconSize + 4) + (slots - 1) * IconGap + SeparatorSpace + StripSpace;
+
+    private string ExpandGlyph => _orientation == CapsuleOrientation.Horizontal ? "\uE70D" : "\uE76B";
 
     public void ShowAt(int x, int y)
     {
@@ -248,7 +329,7 @@ internal sealed class CapsuleWindow
             : idleBg);
         _expandStrip.Child = new FontIcon
         {
-            Glyph = "",
+            Glyph = ExpandGlyph,
             FontSize = 14,
             Foreground = new SolidColorBrush(hovered ? Colors.White : idleFg)
         };

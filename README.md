@@ -24,9 +24,10 @@ TBox 只做一件事：**把这些快捷方式收进盒子，分类、可搜、�
 - **分组**：标签页分组，卡片可拖拽排序、移动到其它分组；支持从桌面批量导入。
 - **自适应尺寸**：悬浮和贴边时窗口都按当前分组的图标数量收缩/扩展；超过设定行数会先加宽（最多 8 列），宽度用尽后再滚动。设置里可开关并限制最多行数。
 - **贴边收起**：
-  - 拖到屏幕左右边缘 → 吸附，拖动时有强调色预览条；
-  - 收起为**胶囊**：竖排显示当前分组前 3 个工具，**点图标直接启动**，点/悬停底部展开条展开面板；
-  - 或切换为**竖条**模式：只留一条细边，悬停展开。
+  - 拖到屏幕左/右/上边缘 → 吸附，拖动时有强调色预览条；顶边保留拖动时的横向位置和宽度；
+  - 收起为**胶囊**：显示当前分组前 3 个工具，**点图标直接启动**；方向可选：自动（左右竖排 / 顶边横排）、竖排、横排；
+  - 展开区：竖排在底部、横排在右端；顶边面板向下滑出；
+  - 或切换为**竖条**模式：只留一条细边，悬停展开；顶边是 16px 高的水平细条。
 - **原生观感**：DWM 抗锯齿圆角、亚克力背板、深浅色跟随系统（也可固定深/浅）。
 - **常驻系统**：托盘图标、`Ctrl+Alt+T` 全局唤出、开机自启、单实例、不进 Alt+Tab。
 - **纯本地**：数据就是一个可读的 JSON，随时备份/迁移/手改。
@@ -37,16 +38,30 @@ TBox 只做一件事：**把这些快捷方式收进盒子，分类、可搜、�
 
 ## 快速开始
 
+### 两种发行包
+
+| 包 | 大小 | 需要 |
+| --- | --- | --- |
+| `TBox-<版本>-lite-win-x64.zip` | 约 10MB | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) + Windows App Runtime 1.7 |
+| `TBox-<版本>-full-win-x64.zip` | 约 100MB | 不需要装 .NET；内含 Windows App Runtime 安装器和 `install-and-run.cmd` |
+
+轻量包适合已经装了 .NET / Windows App Runtime 的机器；完整包适合直接拷到干净机器，
+双击 `install-and-run.cmd` 即可。CI 每次构建都会同时产出两个 zip。
+
 ### 直接运行
 
+解压后运行：
+
 ```powershell
-.\dist\TBox.exe
+.\TBox.exe
 ```
 
-运行需要：
+轻量包需要：
 
 - [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)（装了 .NET 8 SDK 就已包含）
 - Windows App Runtime 1.7（大多数装了商店应用的机器已有；没有时运行会提示）
+
+完整包自带 .NET 运行时，只需要 Windows App Runtime；安装器已在包内，运行 `install-and-run.cmd` 会处理。
 
 ### 从源码构建
 
@@ -58,11 +73,17 @@ dotnet build src\TBox.WinUI\TBox.WinUI.csproj -c Debug -p:Platform=x64
 ### 发布
 
 ```powershell
+# 轻量包：框架依赖 .NET，约 10MB
 dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
-    --self-contained false -p:Platform=x64 -o dist
+    --self-contained false -p:Platform=x64 -o dist-lite
+
+# 完整包：.NET 自包含，约 100MB
+dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
+    --self-contained true -p:Platform=x64 -o dist-full
 ```
 
-产物是绿色目录，整体复制即可分发。
+完整包还需要把 `WindowsAppRuntimeInstall-x64.exe` 和 `scripts/install-and-run.cmd` 放进
+`dist-full`；CI 会自动完成这一步并把两个目录分别压成 zip。产物是绿色目录，整体复制即可分发。
 
 > **构建说明**：本机没有 Visual Studio 的 UWP/MSIX 打包工具链，项目里用
 > `Directory.Build.targets` 把 VS 私有构建目标替换成 `makepri` 手工生成 `resources.pri`。
@@ -74,7 +95,7 @@ dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
 2. **启动**：双击卡片；或选中后按 `Enter`；胶囊里点图标。
 3. **管理**：右键卡片 → 打开 / 以管理员身份运行 / 打开文件所在位置 / 重命名 / 编辑描述关键字 / 编辑路径 / 移动到分组 / 从盒子移除。
 4. **搜索**：点放大镜或 `Ctrl+F`，输入名称、描述或关键字里的词。
-5. **贴边**：拖着标题栏往屏幕左/右边缘靠，出现竖条预览后松手；面板会自动收起。
+5. **贴边**：拖着标题栏往屏幕左/右/上边缘靠，出现强调色预览后松手；面板会自动收起。胶囊方向可选自动（左右竖排 / 顶边横排）、竖排、横排。
 6. **退出**：点关闭是收起到托盘；退出请用托盘菜单。
 
 ### 命令行参数
@@ -82,6 +103,7 @@ dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
 | 参数 | 作用 |
 | --- | --- |
 | `--dock-right` | 启动即吸附到右边缘 |
+| `--dock-top` | 启动即吸附到上边缘（自动横排胶囊） |
 | `--flyout` | 启动即从右下角弹出 |
 | `--settings` | 启动后打开设置 |
 
@@ -117,6 +139,7 @@ TBox\
 ├─ docs\
 │  ├─ PRD.md                产品需求文档
 │  ├─ TECH.md               技术方案、关键实现与踩坑记录
+│  ├─ RESEARCH-MULTI-BOX.md 多盒子/多胶囊预研
 │  └─ images\               截图
 ├─ src\TBox.WinUI\          应用主体（WinUI 3）
 │  ├─ MainWindow.xaml       面板 UI
@@ -130,18 +153,20 @@ TBox\
 │  ├─ make_icon.py          生成应用图标
 │  ├─ screenshot.ps1        窗口截图
 │  └─ capture-tbox.ps1      按进程抓窗口（含子窗口）
-└─ dist\                    发布产物
+├─ dist-lite\ / dist-full\  轻量 / 完整发布产物
 ```
 
 ## 已知限制
 
 - 独占全屏程序（全屏游戏）会盖住置顶窗口；
 - 绿色分发，没有系统级安装/自动更新；
-- 胶囊固定显示当前分组前 3 个工具，暂不可自定义；
+- 胶囊固定显示当前分组前 3 个工具（显示哪些不可自定义，方向可配置）；
 - 「跟随系统」主题在启动时读取，运行中切换系统主题需重启；
-- 分组暂不支持拖拽排序。
+- 分组暂不支持拖拽排序；
+- 多盒子/多胶囊尚未实现，方案和性能预算见[预研文档](docs/RESEARCH-MULTI-BOX.md)。
 
 ## 文档
 
 - [产品需求文档（PRD）](docs/PRD.md)
 - [技术方案](docs/TECH.md)
+- [多盒子/多胶囊预研](docs/RESEARCH-MULTI-BOX.md)

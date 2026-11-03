@@ -69,40 +69,109 @@ public sealed partial class MainWindow
     {
         var area = WorkArea();
         var strip = Dip(StripVisibleWidth);
-        return CurrentDock == DockSide.Right
-            ? area.X + area.Width - strip
-            : area.X - width + strip;
+        return CurrentDock switch
+        {
+            DockSide.Right => area.X + area.Width - strip,
+            DockSide.Top => ExpandedX(width),
+            _ => area.X - width + strip
+        };
+    }
+
+    /// <summary>Y that leaves only a thin strip of the panel on screen (strip style).</summary>
+    private int StripParkedY(int height)
+    {
+        var area = WorkArea();
+        return CurrentDock == DockSide.Top
+            ? area.Y - height + Dip(StripVisibleWidth)
+            : ExpandedY();
     }
 
     private void ShowCollapsedBar(bool visible)
     {
         if (CollapsedBar is null) return;
 
-        CollapsedBar.HorizontalAlignment = CurrentDock == DockSide.Left
-            ? HorizontalAlignment.Right
-            : HorizontalAlignment.Left;
+        if (CurrentDock == DockSide.Top)
+        {
+            // The panel is parked above the screen, so its bottom 16px is the visible top bar.
+            CollapsedBar.Width = double.NaN;
+            CollapsedBar.Height = StripVisibleWidth;
+            CollapsedBar.HorizontalAlignment = HorizontalAlignment.Stretch;
+            CollapsedBar.VerticalAlignment = VerticalAlignment.Bottom;
+            CollapsedBarIndicator.Width = 90;
+            CollapsedBarIndicator.Height = 3;
+        }
+        else
+        {
+            CollapsedBar.Width = StripVisibleWidth;
+            CollapsedBar.Height = double.NaN;
+            CollapsedBar.VerticalAlignment = VerticalAlignment.Stretch;
+            CollapsedBar.HorizontalAlignment = CurrentDock == DockSide.Left
+                ? HorizontalAlignment.Right
+                : HorizontalAlignment.Left;
+            CollapsedBarIndicator.Width = 3;
+            CollapsedBarIndicator.Height = 90;
+        }
+
         CollapsedBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private int ParkedX(int width)
     {
         var area = WorkArea();
-        return CurrentDock == DockSide.Right
-            ? area.X + area.Width + 8
-            : area.X - width - 8;
+        return CurrentDock switch
+        {
+            DockSide.Right => area.X + area.Width + Dip(8),
+            DockSide.Top => ExpandedX(width),
+            _ => area.X - width - Dip(8)
+        };
+    }
+
+    private int ParkedY(int height)
+    {
+        var area = WorkArea();
+        return CurrentDock == DockSide.Top
+            ? area.Y - height - Dip(8)
+            : ExpandedY();
     }
 
     private int ExpandedX(int width)
     {
         var area = WorkArea();
-        return CurrentDock == DockSide.Right ? area.X + area.Width - width : area.X;
+        return CurrentDock switch
+        {
+            DockSide.Right => area.X + area.Width - width,
+            DockSide.Top => Math.Clamp(
+                (int)(Data.Window.X ?? area.X + (area.Width - width) / 2),
+                area.X,
+                Math.Max(area.X, area.X + area.Width - width)),
+            _ => area.X
+        };
+    }
+
+    private int ExpandedY()
+    {
+        var area = WorkArea();
+        return CurrentDock == DockSide.Top
+            ? area.Y
+            : (int)(Data.Window.Y ?? area.Y + Dip(120));
     }
 
     private void MoveTo(int x, int y, int width, int height)
         => _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
 
-    private void PlaceAtEdge(int width, int y, int height)
-        => MoveTo(ExpandedX(width), y, width, height);
+    /// <summary>Places the expanded panel against its docked edge, keeping the other axis.</summary>
+    private void PlaceDocked(int width, int height)
+    {
+        var area = WorkArea();
+        if (CurrentDock == DockSide.Top)
+        {
+            MoveTo(ExpandedX(width), area.Y, width, height);
+            return;
+        }
+
+        var y = Math.Clamp(ExpandedY(), area.Y, Math.Max(area.Y, area.Y + area.Height - height));
+        MoveTo(ExpandedX(width), y, width, height);
+    }
 
     /// <summary>Which edge the panel would dock to right now (overshooting counts).</summary>
     private DockSide ComputeSnapSide(RECT rect)
@@ -111,15 +180,18 @@ public sealed partial class MainWindow
         var rightEdge = area.X + area.Width;
         var snap = Dip(SnapDistance);
 
-        var nearLeft = rect.Left <= area.X + snap;
-        var nearRight = rect.Right >= rightEdge - snap;
+        var candidates = new List<(DockSide Side, double Distance)>();
+        if (rect.Left <= area.X + snap) candidates.Add((DockSide.Left, Math.Abs(rect.Left - area.X)));
+        if (rect.Right >= rightEdge - snap) candidates.Add((DockSide.Right, Math.Abs(rect.Right - rightEdge)));
+        if (rect.Top <= area.Y + snap) candidates.Add((DockSide.Top, Math.Abs(rect.Top - area.Y)));
 
-        if (nearLeft && nearRight)
-            return Math.Abs(rect.Left - area.X) <= Math.Abs(rect.Right - rightEdge) ? DockSide.Left : DockSide.Right;
+        if (candidates.Count == 0) return DockSide.None;
 
-        if (nearLeft) return DockSide.Left;
-        if (nearRight) return DockSide.Right;
-        return DockSide.None;
+        // Nearest edge wins; ties prefer the top edge, then left over right.
+        return candidates
+            .OrderBy(c => c.Distance)
+            .ThenBy(c => c.Side switch { DockSide.Top => 0, DockSide.Left => 1, _ => 2 })
+            .First().Side;
     }
 
     private void UpdateDockHint()
@@ -135,9 +207,23 @@ public sealed partial class MainWindow
             return;
         }
 
-        DockHint.HorizontalAlignment = side == DockSide.Left
-            ? HorizontalAlignment.Left
-            : HorizontalAlignment.Right;
+        if (side == DockSide.Top)
+        {
+            DockHint.Width = double.NaN;
+            DockHint.Height = 3;
+            DockHint.HorizontalAlignment = HorizontalAlignment.Stretch;
+            DockHint.VerticalAlignment = VerticalAlignment.Top;
+        }
+        else
+        {
+            DockHint.Width = 3;
+            DockHint.Height = double.NaN;
+            DockHint.HorizontalAlignment = side == DockSide.Left
+                ? HorizontalAlignment.Left
+                : HorizontalAlignment.Right;
+            DockHint.VerticalAlignment = VerticalAlignment.Stretch;
+        }
+
         DockHint.Visibility = Visibility.Visible;
     }
 
@@ -160,20 +246,21 @@ public sealed partial class MainWindow
         var side = ComputeSnapSide(rect);
 
         Data.Settings.Dock = side;
-        Data.Window.Y = rect.Top;
+        Data.Window.Y = side == DockSide.Top ? area.Y : rect.Top;
         // Auto-fit derives the size from the icon count on every update. Keep the user's preferred
         // width/height untouched so turning the feature off restores them. DockWidth is only the
-        // auto-fit-off restore width, so it must not be overwritten with a content-fit size.
+        // auto-fit-off restore width for side docks, so it must not be overwritten with a fit size.
         if (!AutoFitEnabled)
         {
             Data.Window.Height = height;
             Data.Window.Width = width;
-            if (side != DockSide.None) Data.Settings.DockWidth = width;
+            if (side is DockSide.Left or DockSide.Right) Data.Settings.DockWidth = width;
         }
         Data.Window.X = side switch
         {
             DockSide.Left => area.X,
             DockSide.Right => area.X + area.Width - width,
+            DockSide.Top => Math.Clamp(rect.Left, area.X, Math.Max(area.X, area.X + area.Width - width)),
             _ => rect.Left
         };
         _store.MarkDirty();
@@ -189,7 +276,7 @@ public sealed partial class MainWindow
 
         _collapsed = false;
         SetDockedTopmost(true);
-        PlaceAtEdge(width, rect.Top, height);
+        PlaceDocked(width, height);
         StartDockPolling();
         _leaveSince = DateTime.UtcNow;
     }
@@ -199,17 +286,31 @@ public sealed partial class MainWindow
         if (forceRight) Data.Settings.Dock = DockSide.Right;
         if (!IsDocked) return;
 
+        var area = WorkArea();
         var dockWidth = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
         Data.Settings.DockWidth = dockWidth;
+
         var (width, height) = ExpandedSizePx();
-        var y = (int)(Data.Window.Y ?? Dip(120));
+
+        if (CurrentDock == DockSide.Top)
+        {
+            var x = Data.Window.X is double savedX
+                ? (int)savedX
+                : area.X + (area.Width - width) / 2;
+            Data.Window.X = Math.Clamp(x, area.X, Math.Max(area.X, area.X + area.Width - width));
+            Data.Window.Y = area.Y;
+        }
+        else
+        {
+            Data.Window.Y = ExpandedY();
+        }
 
         SetDockedTopmost(true);
-        PlaceAtEdge(width, y, height);
+        PlaceDocked(width, height);
 
         StartDockPolling();
         HideCollapsed(force: true, animate: false);
-        App.Log($"[dock] restored side={CurrentDock} width={width} y={y} h={height}");
+        App.Log($"[dock] restored side={CurrentDock} width={width} x={Data.Window.X} y={Data.Window.Y} h={height}");
     }
 
     private void SetDockedTopmost(bool docked)
@@ -250,8 +351,8 @@ public sealed partial class MainWindow
 
         if (_collapsed)
         {
-            // Capsule: icons launch on click; hovering the expand tab at the bottom expands.
-            // Strip: hovering the thin edge expands.
+            // Capsule: icons launch on click; hovering the expand tab (bottom for vertical,
+            // right end for horizontal) expands. Strip: hovering the thin edge expands.
             if (UseCapsule)
             {
                 if (_capsule is null || !_capsule.IsVisible)
@@ -260,12 +361,7 @@ public sealed partial class MainWindow
                     return;
                 }
 
-                var cap = _capsule.GetRect();
-                // GetRect/cursor are physical pixels, so the tab band must be physical too.
-                var tabTop = cap.Y + cap.Height - _capsule.ExpandTabPixels;
-                var inTab = cursor.X >= cap.X - 2 && cursor.X <= cap.X + cap.Width + 2
-                            && cursor.Y >= tabTop && cursor.Y <= cap.Y + cap.Height + 2;
-
+                var inTab = _capsule.HitTestExpandTab(cursor.X, cursor.Y);
                 _capsule.SetExpandHover(inTab);
 
                 if (!inTab)
@@ -286,10 +382,20 @@ public sealed partial class MainWindow
 
             GetWindowRect(_hwnd, out var parked);
             var strip = Dip(StripVisibleWidth);
-            var stripLeft = CurrentDock == DockSide.Right ? parked.Left : parked.Right - strip;
-            var stripRight = CurrentDock == DockSide.Right ? parked.Left + strip : parked.Right;
-            var inStrip = cursor.X >= stripLeft - 2 && cursor.X <= stripRight + 2
+            bool inStrip;
+            if (CurrentDock == DockSide.Top)
+            {
+                // The visible sliver is the bottom of the parked panel, at the top screen edge.
+                inStrip = cursor.X >= parked.Left - 2 && cursor.X <= parked.Right + 2
+                          && cursor.Y >= parked.Bottom - strip - 2 && cursor.Y <= parked.Bottom + 2;
+            }
+            else
+            {
+                var stripLeft = CurrentDock == DockSide.Right ? parked.Left : parked.Right - strip;
+                var stripRight = CurrentDock == DockSide.Right ? parked.Left + strip : parked.Right;
+                inStrip = cursor.X >= stripLeft - 2 && cursor.X <= stripRight + 2
                           && cursor.Y >= parked.Top - 2 && cursor.Y <= parked.Bottom + 2;
+            }
 
             if (!inStrip)
             {
@@ -352,6 +458,21 @@ public sealed partial class MainWindow
         return _capsule;
     }
 
+    /// <summary>Auto uses a vertical capsule at the sides and a horizontal one at the top.</summary>
+    private CapsuleOrientation ResolveCapsuleOrientation()
+    {
+        var setting = Data.Settings.CapsuleOrientation;
+        if (setting != CapsuleOrientation.Auto) return setting;
+        return CurrentDock == DockSide.Top ? CapsuleOrientation.Horizontal : CapsuleOrientation.Vertical;
+    }
+
+    /// <summary>Rebuilds a visible capsule after the direction setting changes.</summary>
+    private void ApplyCapsuleOrientation()
+    {
+        if (!IsDocked || !_collapsed || !UseCapsule) return;
+        HideCollapsed(force: true, animate: false);
+    }
+
     private void ShowExpanded()
     {
         if (!_collapsed) return;
@@ -359,7 +480,8 @@ public sealed partial class MainWindow
         _collapsed = false;
 
         var (width, height) = ExpandedSizePx();
-        int y = (int)(Data.Window.Y ?? Dip(120));
+        var x = ExpandedX(width);
+        var y = ExpandedY();
 
         if (UseCapsule) _capsule?.Hide();
         else ShowCollapsedBar(false);
@@ -372,8 +494,11 @@ public sealed partial class MainWindow
         Activate();
         SetDockedTopmost(true);
 
-        var from = UseCapsule ? ParkedX(width) : StripParkedX(width);
-        _ = SlideToAsync(from, ExpandedX(width), y, width, height);
+        var fromX = UseCapsule ? ParkedX(width) : StripParkedX(width);
+        var fromY = CurrentDock == DockSide.Top
+            ? (UseCapsule ? ParkedY(height) : StripParkedY(height))
+            : y;
+        _ = SlideToAsync(fromX, fromY, x, y, width, height);
         App.Log($"[dock] expanded ({Data.Settings.CollapsedStyle})");
     }
 
@@ -385,47 +510,65 @@ public sealed partial class MainWindow
 
         var area = WorkArea();
         var (width, height) = ExpandedSizePx();
-        int y = (int)(Data.Window.Y ?? area.Y + Dip(120));
+        var x = ExpandedX(width);
+        var y = ExpandedY();
 
         if (UseCapsule)
         {
             var capsule = EnsureCapsule();
-            capsule.Update((_currentGroup?.Items ?? new System.Collections.ObjectModel.ObservableCollection<AppItem>()).ToList());
+            var orientation = ResolveCapsuleOrientation();
+            var items = (_currentGroup?.Items ?? new System.Collections.ObjectModel.ObservableCollection<AppItem>()).ToList();
+            capsule.Update(items, orientation);
 
             // The capsule is a window sized in physical pixels; hand it the panel's DPI scale first.
             capsule.SetScale(Scale);
 
-            if (animate) await SlideToAsync(ExpandedX(width), ParkedX(width), y, width, height);
+            var toX = ParkedX(width);
+            var toY = CurrentDock == DockSide.Top ? ParkedY(height) : y;
+            if (animate) await SlideToAsync(x, y, toX, toY, width, height);
 
             Panel.Visibility = Visibility.Collapsed;
             ShowCollapsedBar(false);
-            MoveTo(ParkedX(width), y, width, height);
+            MoveTo(toX, toY, width, height);
 
             var gap = Dip(CapsuleGap);
-            var capsuleX = CurrentDock == DockSide.Right
-                ? area.X + area.Width - capsule.PixelWidth - gap
-                : area.X + gap;
-            var capsuleY = y + (height - capsule.PixelHeight) / 2;
-            capsuleY = Math.Clamp(capsuleY, area.Y,
-                Math.Max(area.Y, area.Y + area.Height - capsule.PixelHeight));
+            int capsuleX, capsuleY;
+            if (CurrentDock == DockSide.Top)
+            {
+                capsuleX = x + (width - capsule.PixelWidth) / 2;
+                capsuleX = Math.Clamp(capsuleX, area.X,
+                    Math.Max(area.X, area.X + area.Width - capsule.PixelWidth));
+                capsuleY = area.Y + gap;
+            }
+            else
+            {
+                capsuleX = CurrentDock == DockSide.Right
+                    ? area.X + area.Width - capsule.PixelWidth - gap
+                    : area.X + gap;
+                capsuleY = y + (height - capsule.PixelHeight) / 2;
+                capsuleY = Math.Clamp(capsuleY, area.Y,
+                    Math.Max(area.Y, area.Y + area.Height - capsule.PixelHeight));
+            }
 
             capsule.ShowAt(capsuleX, capsuleY);
-            App.Log($"[dock] collapsed capsule at {capsuleX},{capsuleY} size={capsule.PixelWidth}x{capsule.PixelHeight} scale={Scale:0.##}");
+            App.Log($"[dock] collapsed capsule at {capsuleX},{capsuleY} size={capsule.PixelWidth}x{capsule.PixelHeight} orientation={orientation} scale={Scale:0.##}");
             return;
         }
 
         // Strip style: leave a thin slice of the panel on the edge and let it slide out on hover.
         _capsule?.Hide();
-        if (animate) await SlideToAsync(ExpandedX(width), StripParkedX(width), y, width, height);
+        var stripToX = StripParkedX(width);
+        var stripToY = StripParkedY(height);
+        if (animate) await SlideToAsync(x, y, stripToX, stripToY, width, height);
 
         Panel.Visibility = Visibility.Collapsed;
         ShowCollapsedBar(true);
-        MoveTo(StripParkedX(width), y, width, height);
-        App.Log($"[dock] collapsed strip at {StripParkedX(width)},{y}");
+        MoveTo(stripToX, stripToY, width, height);
+        App.Log($"[dock] collapsed strip at {stripToX},{stripToY}");
     }
 
-    /// <summary>Eases the window horizontally; moving does not re-lay out XAML, so it stays smooth.</summary>
-    private async Task SlideToAsync(int from, int to, int y, int width, int height, bool hideContentAtEnd = false)
+    /// <summary>Eases the window between two points; moving does not re-lay out XAML, so it stays smooth.</summary>
+    private async Task SlideToAsync(int fromX, int fromY, int toX, int toY, int width, int height, bool hideContentAtEnd = false)
     {
         if (_sliding) return;
         _sliding = true;
@@ -439,11 +582,13 @@ public sealed partial class MainWindow
             {
                 var t = (double)i / frames;
                 var eased = 1 - Math.Pow(1 - t, 3);
-                MoveTo((int)Math.Round(from + (to - from) * eased), y, width, height);
+                var x = (int)Math.Round(fromX + (toX - fromX) * eased);
+                var y = (int)Math.Round(fromY + (toY - fromY) * eased);
+                MoveTo(x, y, width, height);
                 await Task.Delay(frameMs);
             }
 
-            MoveTo(to, y, width, height);
+            MoveTo(toX, toY, width, height);
         }
         finally
         {

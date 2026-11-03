@@ -109,6 +109,9 @@ public sealed class DataStore
         // Hand-edited JSON must not produce a zero-row or absurdly tall fit.
         Data.Settings.AutoFitMaxRows = Math.Clamp(Data.Settings.AutoFitMaxRows, 1, 8);
 
+        if (!Enum.IsDefined(typeof(CapsuleOrientation), Data.Settings.CapsuleOrientation))
+            Data.Settings.CapsuleOrientation = CapsuleOrientation.Auto;
+
         foreach (var group in Data.Groups)
         {
             if (string.IsNullOrWhiteSpace(group.Id)) group.Id = ItemGroup.NewId();

@@ -1,6 +1,6 @@
 # TBox 技术方案
 
-> v2.1.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-03
+> v2.2.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-04
 
 ## 1. 结论先行
 
@@ -110,6 +110,11 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 - 胶囊是**独立窗口**，面板内容完全隐藏，不会有内容从缝隙里透出来；
 - 悬停检测由主窗口 50ms 定时器轮询 `GetCursorPos` 完成，不依赖 `PointerEntered/Exited`（会漏事件、状态卡住）；
 - 菜单/对话框/拖动/输入框聚焦时禁止自动收起。
+- 贴边支持左/右/上。顶边保留拖动时的 x 和宽度，只把 `y` 对齐 `WorkArea.Top`；收起时面板停到
+  `top - height - 8`（胶囊）或 `top - height + 16`（竖条），胶囊在面板宽度内水平居中。
+- 展开/收起统一走二维缓动 `SlideToAsync(fromX, fromY, toX, toY, …)`：左右只动 x，顶边只动 y。
+- 胶囊方向由 `CapsuleOrientation` 决定：`Auto` 在左右贴边用竖排、顶边用横排；显式 `Vertical/Horizontal`
+  覆盖自动规则。横排胶囊右侧端部是展开区，命中测试统一走 `CapsuleWindow.HitTestExpandTab`。
 
 ### 5.1 坐标单位（DIP vs 像素）
 
@@ -118,13 +123,14 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 | 属于 DIP | 属于物理像素 |
 | --- | --- |
 | XAML 里的所有尺寸（`Width`、`Padding`、`CornerRadius`…） | `GetWindowRect` / `GetCursorPos` / `WM_*` 的 `lParam` |
-| 代码里的设计常量（胶囊 56 宽、展开条 38 高、吸附距离 16、竖条露边 16…） | `DisplayArea.WorkArea`、`AppWindow.MoveAndResize`、`AppWindow.Position` |
+| 代码里的设计常量（胶囊短边 56、展开区短边 38、吸附距离 16、竖条露边 16…） | `DisplayArea.WorkArea`、`AppWindow.MoveAndResize`、`AppWindow.Position` |
 
 规则：
 
 - 常量按 DIP 书写，交给上面右列之前一律过 `Dpi.Px(值, Dpi.ScaleFor(hwnd))`；反查用 `Dpi.Dip(px, scale)`；
-- 命中测试两边都用物理像素：如展开条带宽用 `CapsuleWindow.ExpandTabPixels`（= DIP × scale），不要直接拿 38 去和 `GetWindowRect` 比；
+- 命中测试两边都用物理像素：胶囊展开区由 `CapsuleWindow.HitTestExpandTab(x, y)` 判断（内部把 38 DIP 换成像素，竖排查底部、横排查右端），主窗口不要自己算；
 - 窗口像素尺寸是**用户数据**（`data.json` 的 `window.width/height`、`dockWidth`），只在与最小尺寸比较时换成 DIP 下限；自适应尺寸只在运行时生效，不写回这对偏好值（§5.2）；
+- 贴边位置统一走 `ExpandedX/ExpandedY/ParkedX/ParkedY/StripParkedX/StripParkedY`，最终由 `PlaceDocked(width, height)` 落到屏幕：左右只改 x，顶边只改 y；
 - 跟随实时缩放：`XamlRoot.Changed` 里的 `RasterizationScale` 变化 → 重新 `MoveAndResize`（XAML 自己会重排，但窗口的像素尺寸不会变）；
 - 调试：`%LOCALAPPDATA%\TBox\app.log` 里收起日志带 `size=..×.. scale=..`，可直接核对像素尺寸是否等于 DIP × scale。
 
@@ -136,8 +142,9 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 - 图标格 96、GridView 横向内边距 16（10+6）、固定 chrome 126（46 标题 + 42 分组 + 28 状态 + 上下内边距 10）；
 - 宽度 = `16 + 96 × 列数`，高度 = `126 + 96 × 行数`；
 - 列数从 `min(图标数, 4)` 起；行数超过“最大行数”时先加列：悬浮最多 8 列（784 DIP），贴边最多到贴边宽度能放下的列数。仍超出则高度封顶，GridView 内部滚动；
-- 悬浮和贴边时宽度都随列数变化（360–784），贴边面板仍贴住屏幕边缘；`dockWidth` 只在关闭自适应时作为恢复宽度；
-- 空分组用 360×320 容纳空状态；有图标时高度按可见行数精确计算（1 行 = 222 DIP），不留半行。
+- 悬浮和贴边时宽度都随列数变化（360–784），贴边面板仍贴住屏幕边缘；`dockWidth` 只在关闭自适应时作为左右贴边的恢复宽度；
+- 空分组用 360×320 容纳空状态；有图标时高度按可见行数精确计算（1 行 = 222 DIP），不留半行；
+- 顶边同样按图标数贴合，横向 x 保留拖动时的位置；`PlaceDocked` 负责把 y 固定在 `WorkArea.Top`。
 
 两个关键约束：
 
@@ -145,6 +152,25 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 - **搜索输入过程中不触发**：每敲一个字就改窗口尺寸会打断输入；清空搜索后由 `RefreshView` 重新贴合。
 
 日志里 `[fit] items=.. cols=.. rows=../.. maxRows=.. -> WxHpx` 可直接核对列数、行数和像素尺寸。
+
+### 5.3 顶边与横向胶囊
+
+顶边吸附的几何：
+
+- 吸附判定在 `ComputeSnapSide` 里取左/右/上三条边中距离最近且小于 `SnapDistance` 的一条；距离相同优先顶边；
+- 展开：面板 `x` 不变、`y = WorkArea.Top`；收起胶囊时停到 `y = top - height - 8`，胶囊在面板宽度内居中；
+- 顶边竖条：面板停到 `y = top - height + 16`，只露出**面板底部** 16px；`CollapsedBar` 改为
+  `Stretch + Bottom`、90×3 的横向指示条，命中检测用顶部 16px 横带；
+- `SnapOnDragEnd` 顶边分支保存 `x = clamp(rect.Left)`、`y = top`，不写 `DockWidth`；启动时
+  `ApplyDockOnStartup` 用保存的 x（缺失则居中）。
+
+横向胶囊：
+
+- 短边固定 56 DIP，长边 = `18 + 38 × 图标数 + 6 × (图标数 - 1) + 7 + 38`（最多 3 个图标）；
+- 右端 38 DIP 是展开区，glyph 用向下箭头；竖排仍然在底部；
+- 尺寸由 `ContentWidth/ContentHeight` 决定，`PixelWidth/PixelHeight` 再乘 DPI；`Update(items, orientation)`
+  同时切换图标堆叠方向、分隔线、展开条尺寸/边距和根 Padding；
+- 图标异步加载完成后，如果胶囊正在显示，`LoadIconsAsync` 会原地刷新一次，避免启动时一直显示占位图。
 
 ## 6. 对话框
 
@@ -218,16 +244,24 @@ return term.Split(' ').All(t => haystack.Contains(t, OrdinalIgnoreCase));
 # 开发构建
 dotnet build src\TBox.WinUI\TBox.WinUI.csproj -c Debug -p:Platform=x64
 
-# 单文件/目录发布（框架依赖，需要 .NET 8 Desktop Runtime + Windows App Runtime 1.7）
+# 轻量包（框架依赖 .NET，约 10MB；目标机需要 .NET 8 Desktop Runtime + Windows App Runtime 1.7）
 dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
-    --self-contained false -p:Platform=x64 -o dist
+    --self-contained false -p:Platform=x64 -o dist-lite
+
+# 完整包（.NET 自包含，约 100MB；CI 会再放入 Windows App Runtime 安装器和 install-and-run.cmd）
+dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
+    --self-contained true -p:Platform=x64 -o dist-full
 ```
+
+CI 的 `build.yml` 同时发布这两个目录，产物分别是
+`TBox-<ref>-lite-win-x64.zip` 和 `TBox-<ref>-full-win-x64.zip`；推 tag 时两个都会挂到 Release。
 
 命令行参数：
 
 | 参数 | 作用 |
 | --- | --- |
 | `--dock-right` | 启动即吸附到右边缘 |
+| `--dock-top` | 启动即吸附到上边缘（自动横排胶囊） |
 | `--flyout` | 启动即弹出（右下角） |
 | `--settings` | 启动后打开设置 |
 
@@ -245,9 +279,10 @@ dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
 
 - 独占全屏程序（全屏游戏）会盖住置顶窗口；
 - 非 MSIX 分发，没有系统级安装/更新；
-- 胶囊图标固定取当前分组前 3 个，不可自定义；
+- 胶囊固定取当前分组前 3 个工具（显示哪些不可自定义），但方向可配置；
 - 主题"跟随系统"在启动时读取，运行中切换系统主题不会实时刷新；
 - 分组不支持拖拽排序；
+- 多盒子/多胶囊尚未实现，可行性、性能和分阶段方案见 [RESEARCH-MULTI-BOX.md](RESEARCH-MULTI-BOX.md)；
 - 暂无自动化测试（v1 的冒烟测试随 WPF 版本一起移除）。
 
 ## 14. 后续
@@ -255,4 +290,5 @@ dotnet publish src\TBox.WinUI\TBox.WinUI.csproj -c Release -r win-x64 `
 1. 装好 VS「Windows 应用开发」工作负载后，去掉 `Directory.Build.targets` shim，改 MSIX 打包；
 2. 胶囊自定义显示项 + 搜索历史；
 3. 分组拖拽排序、多选批量操作；
-4. 为 `Services`（快捷方式解析、搜索匹配、存储）补回冒烟测试。
+4. 多盒子/多胶囊：先按预研文档做 BoxController 抽取和 N=2/4/8 性能 spike；
+5. 为 `Services`（快捷方式解析、搜索匹配、存储）补回冒烟测试。

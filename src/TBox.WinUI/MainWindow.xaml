@@ -10,8 +10,8 @@
                 HorizontalAlignment="Left" CornerRadius="4"
                 Background="{ThemeResource PanelBg}"
                 PointerPressed="OnCollapsedBarPressed">
-            <Border Width="3" Height="90" CornerRadius="1.5" VerticalAlignment="Center"
-                    HorizontalAlignment="Center" Opacity="0.55"
+            <Border x:Name="CollapsedBarIndicator" Width="3" Height="90" CornerRadius="1.5"
+                    VerticalAlignment="Center" HorizontalAlignment="Center" Opacity="0.55"
                     Background="{ThemeResource AccentFillColorDefaultBrush}" />
         </Border>
 

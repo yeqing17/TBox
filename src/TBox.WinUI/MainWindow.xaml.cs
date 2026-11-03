@@ -96,6 +96,8 @@ public sealed partial class MainWindow : Window
         InitDocking();
 
         var cmdArgs = Environment.GetCommandLineArgs();
+        if (cmdArgs.Any(a => a.Equals("--dock-top", StringComparison.OrdinalIgnoreCase)))
+            Data.Settings.Dock = DockSide.Top;
         ApplyDockOnStartup(forceRight: cmdArgs.Any(a => a.Equals("--dock-right", StringComparison.OrdinalIgnoreCase)));
 
         var flyout = cmdArgs.Any(a => a.Equals("--flyout", StringComparison.OrdinalIgnoreCase));
@@ -354,6 +356,11 @@ public sealed partial class MainWindow : Window
                 App.Log("[icon] " + ex.Message);
             }
         }
+
+        // A capsule created during dock startup may have been filled before the icons finished
+        // loading; refresh it in place so it does not keep showing placeholders.
+        if (_capsule is { IsVisible: true })
+            _capsule.Update(items, ResolveCapsuleOrientation());
     }
 
     // =====================================================================
@@ -757,11 +764,22 @@ public sealed partial class MainWindow : Window
         // "Back to desktop" also releases the edge dock.
         if (IsDocked)
         {
+            if (_collapsed)
+            {
+                // Reveal the panel in place first. ShowExpanded() would slide it in using the dock
+                // geometry after the dock side is cleared, which looks wrong for top docking.
+                _collapsed = false;
+                _capsule?.Hide();
+                ShowCollapsedBar(false);
+                Panel.Visibility = Visibility.Visible;
+                var (width, height) = ExpandedSizePx();
+                PlaceDocked(width, height);
+            }
+
             Data.Settings.Dock = DockSide.None;
             Data.Settings.DockWidth = Math.Max(Dpi.Px(360, Dpi.ScaleFor(_hwnd)), Data.Window.Width);
             _store.MarkDirty();
             StopDockPolling();
-            if (_collapsed) ShowExpanded();
             SetDockedTopmost(false);
         }
 
@@ -770,7 +788,7 @@ public sealed partial class MainWindow : Window
         if (IsDocked)
         {
             GetWindowRect(_hwnd, out var rect);
-            PlaceAtEdge(rect.Right - rect.Left, rect.Top, rect.Bottom - rect.Top);
+            PlaceDocked(rect.Right - rect.Left, rect.Bottom - rect.Top);
         }
         else
         {
@@ -861,6 +879,31 @@ public sealed partial class MainWindow : Window
             IsChecked = Data.Settings.CollapsedStyle == CollapsedStyle.Strip
         };
 
+        var orientationBox = new ComboBox
+        {
+            Width = 210,
+            ItemsSource = new[] { "自动（左右竖排 / 顶边横排）", "竖排", "横排" },
+            SelectedIndex = (int)Data.Settings.CapsuleOrientation,
+            IsEnabled = capsule.IsChecked == true
+        };
+        var orientationRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        orientationRow.Children.Add(new TextBlock
+        {
+            Text = "胶囊方向",
+            FontSize = 12,
+            Opacity = 0.75,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        orientationRow.Children.Add(orientationBox);
+
+        capsule.Checked += (_, _) => orientationBox.IsEnabled = true;
+        strip.Checked += (_, _) => orientationBox.IsEnabled = false;
+
         var autoFit = new ToggleSwitch
         {
             IsOn = Data.Settings.AutoFitWindow,
@@ -949,6 +992,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(Header("收起形态"));
         panel.Children.Add(capsule);
         panel.Children.Add(strip);
+        panel.Children.Add(orientationRow);
         panel.Children.Add(Header("窗口"));
         panel.Children.Add(autoFit);
         panel.Children.Add(maxRowsRow);
@@ -963,7 +1007,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(Header("版本"));
         panel.Children.Add(new TextBlock { Text = versionText, FontSize = 12, Opacity = 0.7 });
 
-        if (!await ShowDialogAsync("设置", panel, 600, "保存", "取消")) return;
+        if (!await ShowDialogAsync("设置", panel, 640, "保存", "取消")) return;
 
         Data.Settings.Theme = themeDark.IsChecked == true ? ThemeMode.Dark
             : themeLight.IsChecked == true ? ThemeMode.Light
@@ -983,8 +1027,19 @@ public sealed partial class MainWindow : Window
         if (!autoFit.IsOn && autoFitWasOn) RestorePreferredSize();
         else if (autoFit.IsOn && autoFitChanged) ApplyAutoFit();
 
+        var orientationValue = orientationBox.SelectedIndex switch
+        {
+            1 => CapsuleOrientation.Vertical,
+            2 => CapsuleOrientation.Horizontal,
+            _ => CapsuleOrientation.Auto
+        };
+        var orientationChanged = orientationValue != Data.Settings.CapsuleOrientation;
+        Data.Settings.CapsuleOrientation = orientationValue;
+
         var nextStyle = capsule.IsChecked == true ? CollapsedStyle.Capsule : CollapsedStyle.Strip;
-        if (nextStyle != Data.Settings.CollapsedStyle) SetCollapsedStyle(nextStyle);
+        var styleChanged = nextStyle != Data.Settings.CollapsedStyle;
+        if (styleChanged) SetCollapsedStyle(nextStyle);
+        else if (orientationChanged) ApplyCapsuleOrientation();
 
         Data.Settings.RunAtStartup = startup.IsOn;
         StartupEntry.Set(startup.IsOn);

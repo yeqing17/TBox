@@ -1,4 +1,5 @@
 using TBox.Interop;
+using TBox.Models;
 
 namespace TBox;
 
@@ -101,7 +102,11 @@ public sealed partial class MainWindow
         }
 
         var height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
-        return (DockWidthPx, height);
+        // Side docks restore DockWidth; top and floating layouts restore the window width.
+        var width = IsDocked && CurrentDock != DockSide.Top
+            ? DockWidthPx
+            : Math.Max(Dip(MinExpandedWidth), (int)Data.Window.Width);
+        return (width, height);
     }
 
     /// <summary>
@@ -149,10 +154,7 @@ public sealed partial class MainWindow
         // A collapsed docked panel is parked off-screen; the next expand applies the preferred height.
         if (IsDocked && _collapsed) return;
 
-        var width = IsDocked
-            ? DockWidthPx
-            : Math.Max(Dip(MinExpandedWidth), (int)Data.Window.Width);
-        var height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        var (width, height) = ExpandedSizePx();
 
         ResizePanel(width, height);
 
@@ -167,12 +169,16 @@ public sealed partial class MainWindow
     /// </summary>
     private void ResizePanel(int width, int height)
     {
+        if (IsDocked)
+        {
+            PlaceDocked(width, height);
+            return;
+        }
+
         var area = WorkArea();
         var pos = _appWindow.Position;
         var x = Math.Clamp(pos.X, area.X, Math.Max(area.X, area.X + area.Width - width));
         var y = Math.Clamp(pos.Y, area.Y, Math.Max(area.Y, area.Y + area.Height - height));
-
-        if (IsDocked) PlaceAtEdge(width, y, height);
-        else MoveTo(x, y, width, height);
+        MoveTo(x, y, width, height);
     }
 }

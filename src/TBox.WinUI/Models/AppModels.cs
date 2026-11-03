@@ -12,7 +12,8 @@ public enum DockSide
 {
     None = 0,
     Left = 1,
-    Right = 2
+    Right = 2,
+    Top = 3
 }
 
 public enum CollapsedStyle
@@ -22,6 +23,15 @@ public enum CollapsedStyle
 
     /// <summary>Thin strip on the edge, expands on hover.</summary>
     Strip = 1
+}
+
+public enum CapsuleOrientation
+{
+    /// <summary>Vertical at the left/right edges, horizontal at the top edge.</summary>
+    Auto = 0,
+
+    Vertical = 1,
+    Horizontal = 2
 }
 
 public enum ThemeMode
@@ -56,6 +66,9 @@ public sealed class AppSettings
 
     /// <summary>How a docked panel presents itself while collapsed.</summary>
     public CollapsedStyle CollapsedStyle { get; set; } = CollapsedStyle.Capsule;
+
+    /// <summary>Capsule layout; Auto turns horizontal when docked to the top edge.</summary>
+    public CapsuleOrientation CapsuleOrientation { get; set; } = CapsuleOrientation.Auto;
 
     /// <summary>Resize the panel to the current group's icon count instead of a fixed window size.</summary>
     public bool AutoFitWindow { get; set; } = true;
