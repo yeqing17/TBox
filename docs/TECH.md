@@ -1,6 +1,6 @@
 # TBox 技术方案
 
-> v2.4.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-06
+> v2.4.1 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-06
 
 ## 1. 结论先行
 
@@ -264,6 +264,13 @@ Esc/失焦关闭）。`ShellHost` 额外注册 `Ctrl+Shift+T`（ID 0x5443），`
 `↑/↓` 由搜索框 KeyDown 驱动 `ListView.SelectedIndex`，Enter 启动，Esc 隐藏；点击结果也可启动。
 搜索窗口只为结果行加载 32px 图标，不写回 `AppItem.Icon`，避免把其他面板的高分辨率缓存降级。
 窗口在首次显示时置于当前活动盒子的显示器中央，并在 Show/Activate 后再 `SetWindowPos(HWND_TOPMOST)`。
+
+**v2.4.1 模式归位**：贴边落位、`ShowExpanded`、`HideCollapsed`、`ShowCollapsedVisual` 都显式把
+`_mode` 设为 `Desktop`。只有“隐藏到托盘”的方块箭头保留 `Hidden`，`PollDock` 才会早退。
+否则从 flyout/隐藏状态回到贴边后，胶囊悬停展开、移开收起和图钉都会停摆。
+
+**胶囊角标**：卡片角标使用 Segoe UI Symbol 的 U+1F48A（💊）单色字形，由 `Foreground` 取
+`AccentFillColorDefaultBrush`；右键「胶囊」菜单使用同一字形，标题栏的 📌 仍只表示面板钉住。
 
 ## 6. 对话框
 
