@@ -163,8 +163,14 @@
                                                     HorizontalAlignment="Left" VerticalAlignment="Top"
                                                     Margin="-3,-3,0,0"
                                                     Visibility="{x:Bind CapsulePinVisibility, Mode=OneWay}">
-                                                <FontIcon Glyph="&#xE718;" FontSize="8"
-                                                          Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                                                <!-- Capsule membership mark: a tiny pill, not the panel pin. -->
+                                                <Grid Width="8" Height="10">
+                                                    <Border CornerRadius="4" BorderThickness="1"
+                                                            BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" />
+                                                    <Rectangle Width="1" Height="8" Margin="0,1"
+                                                               Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                                                               Opacity="0.7" />
+                                                </Grid>
                                             </Border>
                                         </Grid>
                                         <TextBlock Text="{x:Bind Name, Mode=OneWay}" FontSize="12"
