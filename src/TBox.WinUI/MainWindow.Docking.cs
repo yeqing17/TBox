@@ -265,6 +265,7 @@ public sealed partial class MainWindow
         }
 
         _collapsed = false;
+        _mode = PanelMode.Desktop;
         SetDockedTopmost(true);
         PlaceDocked(width, height);
         StartDockPolling();
@@ -488,6 +489,9 @@ public sealed partial class MainWindow
         // below is programmatic; make this the active box for the tray/hotkey.
         _manager.SetActive(this);
         _collapsed = false;
+        // A docked panel is back in desktop mode even if it was previously a flyout/hidden.
+        // Otherwise OnWindowActivated auto-hides it and PollDock skips its hover/collapse logic.
+        _mode = PanelMode.Desktop;
 
         var (width, height) = ExpandedSizePx();
         var x = ExpandedX(width);
@@ -518,6 +522,9 @@ public sealed partial class MainWindow
         if ((_collapsed && !force) || (!force && HoldsOpen())) return;
 
         _collapsed = true;
+        // The docked capsule must keep its hover/expand polling alive even if the panel was
+        // previously a flyout or hidden-to-tray.
+        _mode = PanelMode.Desktop;
 
         var area = WorkArea();
         var (width, height) = ExpandedSizePx();
@@ -620,6 +627,7 @@ public sealed partial class MainWindow
         else
         {
             _collapsed = false;
+            _mode = PanelMode.Desktop;
             _capsule?.Hide();
             _appWindow.Show();
         }
