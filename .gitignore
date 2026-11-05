@@ -6,6 +6,7 @@ dist/
 # local scratch
 .shots/
 .tmp/
+.zcode/
 .testdata*/
 .winui-log.txt
 *.log

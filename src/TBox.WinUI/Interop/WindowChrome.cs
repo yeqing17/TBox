@@ -40,11 +40,27 @@ internal static class WindowChrome
     }
 
     private static readonly Dictionary<IntPtr, IntPtr> OriginalProcedures = new();
+    private static readonly HashSet<IntPtr> KeepBottom = new();
     private static WndProc? _replacement;
-    private static IntPtr _panelHandle;
 
-    /// <summary>When true the panel stays at the bottom of the z-order (desktop mode).</summary>
-    public static bool KeepAtBottom { get; set; }
+    /// <summary>
+    /// Per-window desktop-mode flag: the panel stays at the bottom of the z-order. Each box has
+    /// its own value, so one docked box must not force every other panel to the top/bottom.
+    /// </summary>
+    public static void SetKeepAtBottom(IntPtr hwnd, bool keep)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        if (keep) KeepBottom.Add(hwnd);
+        else KeepBottom.Remove(hwnd);
+    }
+
+    /// <summary>Drops all state for a destroyed HWND (the map would otherwise leak/reuse stale data).</summary>
+    public static void Forget(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        KeepBottom.Remove(hwnd);
+        OriginalProcedures.Remove(hwnd);
+    }
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
@@ -69,7 +85,6 @@ internal static class WindowChrome
     public static void RemoveNonClientFrame(IntPtr hwnd, bool isPanel = false)
     {
         if (hwnd == IntPtr.Zero) return;
-        if (isPanel) _panelHandle = hwnd;
         if (OriginalProcedures.ContainsKey(hwnd)) return;
 
         _replacement ??= Proc;
@@ -99,7 +114,7 @@ internal static class WindowChrome
         if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero)
             return IntPtr.Zero;   // client area covers the whole window
 
-        if (msg == WM_WINDOWPOSCHANGING && KeepAtBottom && hwnd == _panelHandle)
+        if (msg == WM_WINDOWPOSCHANGING && KeepBottom.Contains(hwnd))
         {
             var pos = Marshal.PtrToStructure<WINDOWPOS>(lParam);
             pos.hwndInsertAfter = new IntPtr(HWND_BOTTOM);

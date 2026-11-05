@@ -23,6 +23,9 @@ internal sealed class DialogWindow
     private readonly TaskCompletionSource<bool> _completion = new();
     private readonly double _contentHeight;
     private bool _completed;
+    private bool _dragging;
+    private NativeMethods.POINT _dragCursorStart;
+    private PointInt32 _dragWindowStart;
 
     public DialogWindow(string title, UIElement content, double height,
         string primaryText = "确定", string? secondaryText = "取消")
@@ -33,8 +36,40 @@ internal sealed class DialogWindow
         {
             Text = title,
             FontSize = 16,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis
         };
+
+        var close = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE8BB", FontSize = 14 },
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        if (Application.Current.Resources.TryGetValue("PanelIconButton", out var iconStyle))
+            close.Style = (Style)iconStyle;
+        ToolTipService.SetToolTip(close, "关闭");
+        close.Click += (_, _) => Complete(false);
+
+        // Dialogs are borderless top-level windows, so they need their own title-bar drag target.
+        // A transparent background makes the whole header hit-testable, except the close button.
+        var header = new Grid
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0)),
+            Padding = new Thickness(0, 0, 0, 6)
+        };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(titleText, 0);
+        Grid.SetColumn(close, 1);
+        header.Children.Add(titleText);
+        header.Children.Add(close);
+        header.PointerPressed += OnHeaderPointerPressed;
+        header.PointerMoved += OnHeaderPointerMoved;
+        header.PointerReleased += OnHeaderPointerReleased;
+        header.PointerCanceled += OnHeaderPointerReleased;
 
         var body = new ScrollViewer
         {
@@ -69,10 +104,10 @@ internal sealed class DialogWindow
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        Grid.SetRow(titleText, 0);
+        Grid.SetRow(header, 0);
         Grid.SetRow(body, 1);
         Grid.SetRow(buttons, 2);
-        grid.Children.Add(titleText);
+        grid.Children.Add(header);
         grid.Children.Add(body);
         grid.Children.Add(buttons);
 
@@ -82,7 +117,8 @@ internal sealed class DialogWindow
             BorderThickness = new Thickness(1),
             Padding = new Thickness(22, 20, 22, 18),
             Child = grid,
-            RequestedTheme = AppTheme.Current
+            RequestedTheme = AppTheme.Current,
+            UseLayoutRounding = true
         };
         root.Background = new SolidColorBrush(AppTheme.IsDark
             ? Color.FromArgb(246, 28, 28, 28)
@@ -116,11 +152,56 @@ internal sealed class DialogWindow
         ApplySize(Dpi.ScaleFor(hwnd));
         _window.Closed += (_, _) =>
         {
+            App.Log($"[dialog] closed '{title}' completed={_completed}");
             Open.Remove(this);
+            WindowChrome.Forget(hwnd);
             if (!_completed) _completion.TrySetResult(false);
         };
 
         Open.Add(this);
+    }
+
+    private void OnHeaderPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is not UIElement element) return;
+        if (IsInteractive(e.OriginalSource as DependencyObject)) return;
+
+        _dragging = true;
+        NativeMethods.GetCursorPos(out _dragCursorStart);
+        _dragWindowStart = _window.AppWindow.Position;
+        element.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private static bool IsInteractive(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase) return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return false;
+    }
+
+    private void OnHeaderPointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_dragging) return;
+
+        NativeMethods.GetCursorPos(out var cursor);
+        _window.AppWindow.Move(new PointInt32(
+            _dragWindowStart.X + cursor.X - _dragCursorStart.X,
+            _dragWindowStart.Y + cursor.Y - _dragCursorStart.Y));
+        e.Handled = true;
+    }
+
+    private void OnHeaderPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_dragging) return;
+
+        _dragging = false;
+        if (sender is UIElement element) element.ReleasePointerCapture(e.Pointer);
+        e.Handled = true;
     }
 
     /// <summary>Resizes the window for a DPI scale, keeping its current spot once it is on screen.</summary>
@@ -137,13 +218,25 @@ internal sealed class DialogWindow
 
     public Task<bool> ShowAsync(Window? owner)
     {
-        CenterOn(owner);
-        _window.AppWindow.Show();
-        _window.Activate();
+        try
+        {
+            App.Log($"[dialog] showing '{_window.Title}' owner={owner?.Title ?? "(none)"}");
+            CenterOn(owner);
+            _window.AppWindow.Show();
+            _window.Activate();
 
-        NativeMethods.SetWindowPos(WinRT.Interop.WindowNative.GetWindowHandle(_window),
-            new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+            NativeMethods.SetWindowPos(WinRT.Interop.WindowNative.GetWindowHandle(_window),
+                new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+
+            var r = _window.AppWindow.Position;
+            App.Log($"[dialog] shown '{_window.Title}' at {r.X},{r.Y} {_window.AppWindow.Size.Width}x{_window.AppWindow.Size.Height}");
+        }
+        catch (Exception ex)
+        {
+            App.Log("[dialog] show failed: " + ex);
+            throw;
+        }
 
         return _completion.Task;
     }
@@ -164,6 +257,7 @@ internal sealed class DialogWindow
     {
         if (_completed) return;
         _completed = true;
+        App.Log($"[dialog] complete '{_window.Title}' result={result}");
         _completion.TrySetResult(result);
         _window.Close();
     }

@@ -31,12 +31,12 @@ public sealed partial class MainWindow
     private bool _autoFitReady;
     private double _autoFitScale = -1;
 
-    private bool AutoFitEnabled => Data.Settings.AutoFitWindow;
+    private bool AutoFitEnabled => Settings.AutoFitWindow;
 
-    private int AutoFitRowLimit => Math.Clamp(Data.Settings.AutoFitMaxRows, 1, FitMaxRowsLimit);
+    private int AutoFitRowLimit => Math.Clamp(Settings.AutoFitMaxRows, 1, FitMaxRowsLimit);
 
     /// <summary>Width a docked panel restores to when auto-fit is off.</summary>
-    private int DockWidthPx => Math.Max(Dip(MinExpandedWidth), (int)Data.Settings.DockWidth);
+    private int DockWidthPx => Math.Max(Dip(MinExpandedWidth), (int)Settings.DockWidth);
 
     private readonly record struct FitSize(int WidthPx, int HeightPx, int Columns, int Rows, int VisibleRows);
 
@@ -101,17 +101,17 @@ public sealed partial class MainWindow
             return (fit.WidthPx, fit.HeightPx);
         }
 
-        var height = (int)(Data.Window.Height > 200 ? Data.Window.Height : Dip(540));
+        var height = (int)(Box.Window.Height > 200 ? Box.Window.Height : Dip(540));
         // Side docks restore DockWidth; top and floating layouts restore the window width.
         var width = IsDocked && CurrentDock != DockSide.Top
             ? DockWidthPx
-            : Math.Max(Dip(MinExpandedWidth), (int)Data.Window.Width);
+            : Math.Max(Dip(MinExpandedWidth), (int)Box.Window.Width);
         return (width, height);
     }
 
     /// <summary>
     /// Applies the current group's fit size. Actual geometry is not written back to
-    /// Data.Window.Width/Height: those stay the user's preferred size, so turning auto-fit off
+    /// Box.Window.Width/Height: those stay the user's preferred size, so turning auto-fit off
     /// restores the window instead of leaving it stuck at a shrunk size.
     /// </summary>
     private void ApplyAutoFit()
@@ -146,6 +146,11 @@ public sealed partial class MainWindow
 
         _autoFitScale = scale;
         ApplyAutoFit();
+
+        // Re-decode icons at the new monitor's physical size (the shared AppItem image was
+        // decoded for the old scale). Touch every group, not only the visible one.
+        var items = Box.Groups.SelectMany(g => g.Items).Distinct().ToList();
+        if (items.Count > 0) _ = LoadIconsAsync(items, force: true);
     }
 
     /// <summary>Restores the user's preferred size when auto-fit is switched off.</summary>

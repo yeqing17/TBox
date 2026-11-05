@@ -25,6 +25,7 @@ internal sealed class ShellHost : IDisposable
     private const uint MF_STRING = 0x0;
     private const uint MF_SEPARATOR = 0x800;
     private const uint MF_CHECKED = 0x8;
+    private const uint MF_GRAYED = 0x1;
     private const uint TPM_LEFTALIGN = 0x0;
     private const uint TPM_RIGHTBUTTON = 0x2;
     private const uint TPM_RETURNCMD = 0x100;
@@ -101,7 +102,7 @@ internal sealed class ShellHost : IDisposable
         Shell_NotifyIcon(1 /* NIM_MODIFY */, ref data);
     }
 
-    public sealed record MenuItemSpec(string Text, int Id, bool Checked = false, bool Separator = false);
+    public sealed record MenuItemSpec(string Text, int Id, bool Checked = false, bool Separator = false, bool Enabled = true);
 
     /// <summary>Shows a native popup menu at the cursor; returns the chosen id (0 when dismissed).</summary>
     public int ShowMenu(IEnumerable<MenuItemSpec> items)
@@ -119,7 +120,7 @@ internal sealed class ShellHost : IDisposable
                     continue;
                 }
 
-                var flags = MF_STRING | (item.Checked ? MF_CHECKED : 0);
+                var flags = MF_STRING | (item.Checked ? MF_CHECKED : 0) | (item.Enabled ? 0 : MF_GRAYED);
                 AppendMenu(menu, flags, (UIntPtr)item.Id, item.Text);
             }
 
@@ -167,6 +168,12 @@ internal sealed class ShellHost : IDisposable
             };
             Shell_NotifyIcon(2 /* NIM_DELETE */, ref data);
             _trayAdded = false;
+        }
+
+        if (_hotkeyRegistered)
+        {
+            UnregisterHotKey(_hwnd, HotkeyId);
+            _hotkeyRegistered = false;
         }
 
         if (_trayIcon != IntPtr.Zero) DestroyIcon(_trayIcon);

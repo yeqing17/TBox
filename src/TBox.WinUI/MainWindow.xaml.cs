@@ -19,7 +19,12 @@ namespace TBox;
 public sealed partial class MainWindow : Window
 {
     private readonly DataStore _store = DataStore.Instance;
+    private readonly BoxManager _manager;
+    private readonly BoxData _box;
     private TBoxData Data => _store.Data;
+
+    internal BoxData Box => _box;
+    private BoxSettings Settings => _box.Settings;
 
     private ItemGroup? _currentGroup;
     private string _filter = string.Empty;
@@ -32,15 +37,17 @@ public sealed partial class MainWindow : Window
     private POINT _dragCursorStart;
     private RECT _dragWindowStart;
 
-    private ShellHost? _shell;
     private AppWindow _appWindow = null!;
     private bool _suppressAutoHide;
 
     private enum PanelMode { Desktop, Flyout, Hidden }
     private PanelMode _mode = PanelMode.Desktop;
 
-    public MainWindow()
+    internal MainWindow(BoxManager manager, BoxData box)
     {
+        _manager = manager;
+        _box = box;
+
         InitializeComponent();
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -51,21 +58,18 @@ public sealed partial class MainWindow : Window
         AppLogo.Load();
         HeaderLogo.Source = AppLogo.Image;
 
-        // Everything that affects the first frame runs before App.OnLaunched calls Activate().
-        // Loading the store after the window is visible is what made it appear at the default
-        // placement for a moment and then jump to the saved/fitted one.
-        _store.Load();
-        AppTheme.Resolve(Data.Settings.Theme);
+        // The manager loaded the store and resolved the theme before creating any window, so the
+        // first frame already has the right data, size and palette.
         Root.RequestedTheme = AppTheme.Current;
-        App.Log($"[win] store loaded, groups={Data.Groups.Count} theme={AppTheme.Current}");
+        App.Log($"[win] box={Box.Name} groups={Box.Groups.Count} theme={AppTheme.Current}");
 
         ConfigureWindow();
         EnsureChrome();
         ApplyShape();
 
-        Tabs.ItemsSource = Data.Groups;
-        _currentGroup = Data.Groups.FirstOrDefault(g => g.Id == Data.Settings.LastGroupId)
-                        ?? Data.Groups.FirstOrDefault();
+        Tabs.ItemsSource = Box.Groups;
+        _currentGroup = Box.Groups.FirstOrDefault(g => g.Id == Settings.LastGroupId)
+                        ?? Box.Groups.FirstOrDefault();
         Tabs.SelectedItem = _currentGroup;
         RefreshView();
 
@@ -73,21 +77,26 @@ public sealed partial class MainWindow : Window
         Activated += OnWindowActivated;
         Closed += (_, _) =>
         {
+            StopDockPolling();
+
             if (GetWindowRect(_hwnd, out var rect))
             {
-                Data.Window.X = rect.Left;
-                Data.Window.Y = rect.Top;
+                Box.Window.X = rect.Left;
+                Box.Window.Y = rect.Top;
                 // Auto-fit sizes are derived from the group; keep the preferred size the user set
                 // so the feature can be switched off without the window staying shrunk.
                 if (!AutoFitEnabled)
                 {
-                    Data.Window.Width = rect.Right - rect.Left;
-                    Data.Window.Height = rect.Bottom - rect.Top;
+                    Box.Window.Width = rect.Right - rect.Left;
+                    Box.Window.Height = rect.Bottom - rect.Top;
                 }
             }
 
+            _capsule?.Close();
+            _capsule = null;
             _store.SaveNow();
-            _shell?.Dispose();
+            WindowChrome.Forget(_hwnd);
+            _manager.OnWindowClosed(this);
         };
 
         if (Content is FrameworkElement root)
@@ -96,24 +105,16 @@ public sealed partial class MainWindow : Window
             root.Loaded += (_, _) => ApplyShape();
         }
 
-        InitDocking();
+        BoxName.Text = Box.Name;
+        Title = $"TBox · {Box.Name}";
+        UpdatePinButton();
+        UpdateRaiseButton();
 
-        var cmdArgs = Environment.GetCommandLineArgs();
-        if (cmdArgs.Any(a => a.Equals("--dock-top", StringComparison.OrdinalIgnoreCase)))
-            Data.Settings.Dock = DockSide.Top;
-        ApplyDockOnStartup(forceRight: cmdArgs.Any(a => a.Equals("--dock-right", StringComparison.OrdinalIgnoreCase)));
-
-        var flyout = cmdArgs.Any(a => a.Equals("--flyout", StringComparison.OrdinalIgnoreCase));
-        if (flyout && !IsDocked)
-        {
-            _mode = PanelMode.Flyout;
-            WindowChrome.KeepAtBottom = false;
-            if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = true;
-        }
-        else if (!IsDocked)
+        ApplyDockOnStartup();
+        if (!IsDocked)
         {
             _mode = PanelMode.Desktop;
-            WindowChrome.KeepAtBottom = true;
+            WindowChrome.SetKeepAtBottom(_hwnd, true);
             SetWindowPos(_hwnd, new IntPtr(1) /* HWND_BOTTOM */, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
@@ -122,9 +123,7 @@ public sealed partial class MainWindow : Window
         _autoFitScale = Scale;
         ApplyAutoFit();
 
-        if (flyout && !IsDocked) PositionNearTray();
-
-        App.Log($"[win] hwnd=0x{_hwnd:X}");
+        App.Log($"[win] box={Box.Name} hwnd=0x{_hwnd:X}");
     }
 
     /// <summary>
@@ -176,7 +175,7 @@ public sealed partial class MainWindow : Window
             presenter.IsResizable = true;
         }
 
-        var placement = DataStore.Instance.Data.Window;
+        var placement = Box.Window;
         // Saved placement is physical pixels; the fallbacks are design DIPs and have to be scaled.
         var scale = Dpi.ScaleFor(_hwnd);
         var width = placement.Width > 320 ? (int)placement.Width : Dpi.Px(760, scale);
@@ -190,112 +189,41 @@ public sealed partial class MainWindow : Window
     // Startup
     // =====================================================================
 
-    private async void OnFirstActivated(object sender, WindowActivatedEventArgs args)
+    private void OnFirstActivated(object sender, WindowActivatedEventArgs args)
     {
         Activated -= OnFirstActivated;
         if (_initialized) return;
         _initialized = true;
 
-        // Data, theme, tabs and placement were prepared in the constructor before the first frame;
-        // activation only sets up system integration and re-asserts the chrome.
-        App.Log("[win] activated");
+        // Data, theme, tabs and placement were prepared before the first frame; activation only
+        // re-asserts the chrome and starts following live DPI changes.
+        App.Log($"[win] activated box={Box.Name}");
 
-        if (_store.LoadWarning is { Length: > 0 } warning)
-            _ = ShowMessageAsync("数据读取失败", warning);
-
-        InitShellHost();
         EnsureChrome();
         ApplyShape();
 
         if (Root.XamlRoot is { } autoFitRoot)
             autoFitRoot.Changed += (_, _) => OnAutoFitScaleChanged(autoFitRoot.RasterizationScale);
-
-        var cmdArgs = Environment.GetCommandLineArgs();
-
-        if (cmdArgs.Any(a => a.Equals("--settings", StringComparison.OrdinalIgnoreCase)))
-        {
-            await Task.Delay(300);
-            OnSettingsClick(this, new RoutedEventArgs());
-        }
-
-        if (cmdArgs.Any(a => a.Equals("--flyout", StringComparison.OrdinalIgnoreCase)))
-        {
-            ShowFlyout();
-        }
     }
 
-    private void InitShellHost()
+    internal void SetCollapsedStyle(CollapsedStyle style)
     {
-        try
-        {
-            _shell = new ShellHost();
-            _shell.HotkeyPressed += ToggleFlyout;
-            _shell.TrayLeftClick += ToggleFlyout;
-            _shell.TrayRightClick += ShowTrayMenu;
-
-            var hotkey = _shell.RegisterHotkey();
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "tbox.ico");
-            var tray = _shell.AddTrayIcon(iconPath, "TBox 桌面工具箱");
-            App.Log($"[shell] hotkey={hotkey} tray={tray}");
-        }
-        catch (Exception ex)
-        {
-            App.Log("[shell] init failed: " + ex);
-        }
-    }
-
-    private void SetCollapsedStyle(CollapsedStyle style)
-    {
-        Data.Settings.CollapsedStyle = style;
+        Settings.CollapsedStyle = style;
         _store.MarkDirty();
 
         if (!IsDocked) return;
 
+        // Pinning is explicit: changing the future collapse style must not close the panel now.
+        if (Settings.Pinned)
+        {
+            App.Log($"[box] {Box.Name} collapsed style -> {style} (pinned)");
+            return;
+        }
+
         _capsule?.Hide();
         ShowCollapsedBar(false);
         HideCollapsed(force: true);
-        App.Log($"[dock] collapsed style -> {style}");
-    }
-
-    private void ShowTrayMenu()
-    {
-        if (_shell is null) return;
-
-        var choice = _shell.ShowMenu(new[]
-        {
-            new ShellHost.MenuItemSpec("弹出面板", 1),
-            new ShellHost.MenuItemSpec("放回桌面", 2),
-            new ShellHost.MenuItemSpec("", 0, Separator: true),
-            new ShellHost.MenuItemSpec("收起样式：胶囊（图标）", 5, Checked: Data.Settings.CollapsedStyle == CollapsedStyle.Capsule),
-            new ShellHost.MenuItemSpec("收起样式：竖条（极简）", 6, Checked: Data.Settings.CollapsedStyle == CollapsedStyle.Strip),
-            new ShellHost.MenuItemSpec("", 0, Separator: true),
-            new ShellHost.MenuItemSpec("设置", 3),
-            new ShellHost.MenuItemSpec("退出", 4)
-        });
-
-        switch (choice)
-        {
-            case 1:
-                ShowFlyout();
-                break;
-            case 2:
-                SinkToDesktop();
-                break;
-            case 5:
-                SetCollapsedStyle(CollapsedStyle.Capsule);
-                break;
-            case 6:
-                SetCollapsedStyle(CollapsedStyle.Strip);
-                break;
-            case 3:
-                OnSettingsClick(this, new RoutedEventArgs());
-                break;
-            case 4:
-                _store.SaveNow();
-                _shell?.Dispose();
-                Application.Current.Exit();
-                break;
-        }
+        App.Log($"[box] {Box.Name} collapsed style -> {style}");
     }
 
     // =====================================================================
@@ -306,7 +234,7 @@ public sealed partial class MainWindow : Window
     {
         if (Tabs.SelectedItem is not ItemGroup group) return;
         _currentGroup = group;
-        Data.Settings.LastGroupId = group.Id;
+        Settings.LastGroupId = group.Id;
         _store.MarkDirty();
         RefreshView();
     }
@@ -333,7 +261,7 @@ public sealed partial class MainWindow : Window
             ? $"{total} 个工具 · {missing} 个路径已失效"
             : $"{total} 个工具";
 
-        foreach (var group in Data.Groups) group.RefreshCount();
+        foreach (var group in Box.Groups) group.RefreshCount();
 
         // Not while filtering: resizing on every keystroke would make the search box jump around.
         if (_autoFitReady && _filter.Length == 0) ApplyAutoFit();
@@ -341,17 +269,24 @@ public sealed partial class MainWindow : Window
         _ = LoadIconsAsync(items.ToList());
     }
 
-    private async Task LoadIconsAsync(IReadOnlyList<AppItem> items)
+    private async Task LoadIconsAsync(IReadOnlyList<AppItem> items, bool force = false)
     {
+        // The card's icon is 44 DIP; decoding at 44 × monitor scale means a 4K/200% card gets
+        // exactly 88 physical pixels instead of a 256→88 compositor downscale.
+        var targetPixels = Math.Max(16, Dpi.Px(44, Scale));
+
         foreach (var item in items)
         {
-            if (item.Icon is not null) continue;
+            // Windows on different monitors share AppItem.Icon. Keep the largest decode; a
+            // lower-DPI window can downscale it, but never replace a 2x image with a 1x one.
+            if (item.Icon is not null && (!force || targetPixels <= item.IconDecodePixels)) continue;
 
             try
             {
                 var path = await Task.Run(() => ShellIcons.EnsureIcon(item));
                 item.IconPath = path;
-                item.Icon = await IconLoader.LoadAsync(path);
+                item.Icon = await IconLoader.LoadAsync(path, targetPixels);
+                if (item.Icon is not null) item.IconDecodePixels = targetPixels;
                 item.IsMissing = !item.TargetExists();
             }
             catch (Exception ex)
@@ -361,9 +296,14 @@ public sealed partial class MainWindow : Window
         }
 
         // A capsule created during dock startup may have been filled before the icons finished
-        // loading; refresh it in place so it does not keep showing placeholders.
+        // loading; refresh it in place so it does not keep showing placeholders. Always use the
+        // current group (not a filtered/reloaded list passed in by the caller).
         if (_capsule is { IsVisible: true })
-            _capsule.Update(items, ResolveCapsuleOrientation());
+        {
+            var capsuleItems = _currentGroup?.Items.ToList()
+                               ?? new List<AppItem>();
+            _capsule.Update(capsuleItems, ResolveCapsuleOrientation());
+        }
     }
 
     // =====================================================================
@@ -385,10 +325,15 @@ public sealed partial class MainWindow : Window
 
     private void SetSearchVisible(bool show)
     {
+        SearchHost.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         SearchBox.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         SearchPlaceholder.Visibility = show && SearchBox.Text.Length == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+        // The header is only 360 DIP wide at the minimum size; the pin gets its own slot while
+        // search is closed and yields it back to the search field while search is open.
+        PinButton.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
 
         SearchToggle.Foreground = (Brush)Application.Current.Resources[
             show ? "AccentFillColorDefaultBrush" : "PanelFgSecondary"];
@@ -406,6 +351,59 @@ public sealed partial class MainWindow : Window
         SearchPlaceholder.Visibility = SearchBox.Visibility == Visibility.Visible && SearchBox.Text.Length == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
+    }
+
+    private void OnPinClick(object sender, RoutedEventArgs e) => SetPinned(!Settings.Pinned);
+
+    /// <summary>Pinned panels ignore auto-collapse and flyout deactivation.</summary>
+    internal void SetPinned(bool pinned)
+    {
+        if (Settings.Pinned == pinned)
+        {
+            UpdatePinButton();
+            return;
+        }
+
+        Settings.Pinned = pinned;
+        _store.MarkDirty();
+        _leaveSince = DateTime.MinValue;
+        UpdatePinButton();
+
+        if (pinned)
+        {
+            if (!_appWindow.IsVisible)
+            {
+                if (IsDocked)
+                {
+                    _appWindow.Show();
+                    ShowExpanded();
+                }
+                else
+                {
+                    ShowFlyout();
+                }
+            }
+            else if (IsDocked && _collapsed)
+            {
+                ShowExpanded();
+            }
+        }
+        else
+        {
+            // Unpinning restarts the normal 400ms leave timer; an open flyout hides on its next
+            // deactivation, while a docked panel collapses when the cursor is outside.
+            _leaveSince = DateTime.UtcNow;
+        }
+
+        App.Log($"[pin] {Box.Name} pinned={pinned}");
+    }
+
+    private void UpdatePinButton()
+    {
+        var pinned = Settings.Pinned;
+        PinButton.Foreground = (Brush)Application.Current.Resources[
+            pinned ? "AccentFillColorDefaultBrush" : "PanelFgSecondary"];
+        ToolTipService.SetToolTip(PinButton, pinned ? "取消钉住" : "钉住");
     }
 
     private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
@@ -618,7 +616,7 @@ public sealed partial class MainWindow : Window
 
     private async Task MoveItemAsync(AppItem item)
     {
-        var targets = Data.Groups.Where(g => g != _currentGroup).ToList();
+        var targets = Box.Groups.Where(g => g != _currentGroup).ToList();
         if (targets.Count == 0)
         {
             await ShowMessageAsync("没有其它分组", "先新建一个分组再移动。");
@@ -633,7 +631,7 @@ public sealed partial class MainWindow : Window
         var index = list.SelectedIndex;
         if (index < 0) return;
 
-        var sourceGroup = Data.Groups.FirstOrDefault(g => g.Items.Contains(item));
+        var sourceGroup = Box.Groups.FirstOrDefault(g => g.Items.Contains(item));
         if (sourceGroup is null) return;
 
         sourceGroup.Items.Remove(item);
@@ -652,7 +650,7 @@ public sealed partial class MainWindow : Window
 
         if (!await ShowDialogAsync("移除工具", text, 210, "移除", "取消")) return;
 
-        var group = Data.Groups.FirstOrDefault(g => g.Items.Contains(item));
+        var group = Box.Groups.FirstOrDefault(g => g.Items.Contains(item));
         group?.Items.Remove(item);
         ShellIcons.Invalidate(item.Id);
         _store.MarkDirty();
@@ -664,15 +662,87 @@ public sealed partial class MainWindow : Window
         var name = await PromptAsync("新建分组", "分组名称", "新分组");
         if (name is null) return;
 
-        if (Data.Groups.Any(g => string.Equals(g.Name, name, StringComparison.CurrentCultureIgnoreCase)))
+        if (Box.Groups.Any(g => string.Equals(g.Name, name, StringComparison.CurrentCultureIgnoreCase)))
         {
             await ShowMessageAsync("分组已存在", $"已经有一个叫「{name}」的分组了。");
             return;
         }
 
         var group = new ItemGroup { Name = name };
-        Data.Groups.Add(group);
+        Box.Groups.Add(group);
         Tabs.SelectedItem = group;
+        _store.MarkDirty();
+    }
+
+    private void OnTabRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement source) return;
+        if (source.DataContext is not ItemGroup group) return;
+
+        var rename = new MenuFlyoutItem { Text = "重命名分组…", Icon = new FontIcon { Glyph = "\uE8AC" } };
+        rename.Click += async (_, _) => await RenameGroupAsync(group);
+
+        var remove = new MenuFlyoutItem
+        {
+            Text = "删除分组…",
+            Icon = new FontIcon { Glyph = "\uE74D" },
+            IsEnabled = Box.Groups.Count > 1
+        };
+        remove.Click += async (_, _) => await DeleteGroupAsync(group);
+
+        var menu = new MenuFlyout();
+        menu.Items.Add(rename);
+        menu.Items.Add(remove);
+
+        SetCollapseSuppressed(true);
+        menu.Closed += (_, _) => SetCollapseSuppressed(false);
+        menu.ShowAt(source, new FlyoutShowOptions { Position = e.GetPosition(source) });
+        e.Handled = true;
+    }
+
+    private async Task RenameGroupAsync(ItemGroup group)
+    {
+        var name = await PromptAsync("重命名分组", "分组名称", group.Name);
+        if (name is null) return;
+
+        if (Box.Groups.Any(g => g != group
+                && string.Equals(g.Name, name, StringComparison.CurrentCultureIgnoreCase)))
+        {
+            await ShowMessageAsync("分组已存在", $"已经有一个叫「{name}」的分组了。");
+            return;
+        }
+
+        group.Name = name;
+        _store.MarkDirty();
+    }
+
+    private async Task DeleteGroupAsync(ItemGroup group)
+    {
+        if (Box.Groups.Count <= 1)
+        {
+            await ShowMessageAsync("不能删除", "至少保留一个分组。");
+            return;
+        }
+
+        var count = group.Items.Count;
+        var message = count == 0
+            ? $"确定删除分组「{group.Name}」吗？"
+            : $"确定删除分组「{group.Name}」吗？\n分组里的 {count} 个工具会一起移除，但不会删除磁盘上的文件。";
+        var text = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap };
+        if (!await ShowDialogAsync("删除分组", text, 210, "删除", "取消")) return;
+
+        var index = Box.Groups.IndexOf(group);
+        Box.Groups.Remove(group);
+
+        if (_currentGroup == group)
+        {
+            var next = Box.Groups[Math.Clamp(index, 0, Box.Groups.Count - 1)];
+            _currentGroup = next;
+            Settings.LastGroupId = next.Id;
+            Tabs.SelectedItem = next;
+            RefreshView();
+        }
+
         _store.MarkDirty();
     }
 
@@ -708,24 +778,63 @@ public sealed partial class MainWindow : Window
 
     private void OnRaiseClick(object sender, RoutedEventArgs e)
     {
-        if (_mode == PanelMode.Desktop) ShowFlyout();
-        else SinkToDesktop();
+        // One click, one action: hide to tray. This must not change the dock/placement; the tray
+        // menu's "放回桌面" is the explicit un-dock action. Keeping the dock means showing it
+        // again from the tray expands at the edge and can auto-collapse to its capsule.
+        if (!_appWindow.IsVisible)
+        {
+            ShowFlyout();
+            return;
+        }
+
+        SavePlacement();
+        _appWindow.Hide();
+        _mode = PanelMode.Hidden;
+        UpdateRaiseButton();
     }
+
+    private void UpdateRaiseButton() =>
+        ToolTipService.SetToolTip(RaiseButton, "隐藏到托盘");
 
     /// <summary>Hide/show like a system flyout: detached from the desktop, above all windows.</summary>
     public void ToggleFlyout()
     {
-        if (_mode == PanelMode.Flyout && _appWindow.IsVisible)
+        if (!_appWindow.IsVisible)
         {
+            ShowFlyout();
+            return;
+        }
+
+        // Docked panels toggle between capsule and expanded.
+        if (IsDocked)
+        {
+            if (_collapsed) ShowExpanded();
+            else HideCollapsed(force: true);
+            UpdateRaiseButton();
+            return;
+        }
+
+        // Only a topmost flyout is "popped up" and should hide on the next tray/hotkey click.
+        // A Desktop-mode panel is visible at the desktop layer but may be behind other windows;
+        // treat the click as "show/raise" (and restore its saved position), not as "hide".
+        if (_mode == PanelMode.Flyout)
+        {
+            SavePlacement();
             _appWindow.Hide();
             _mode = PanelMode.Hidden;
+            UpdateRaiseButton();
             return;
         }
 
         ShowFlyout();
     }
 
-    public void ShowFlyout()
+    public void ShowFlyout() => ShowFlyout(rememberPosition: true);
+
+    /// <summary>Explicit --flyout startup: the classic bottom-right popup, not the saved spot.</summary>
+    public void ShowFlyoutAtTray() => ShowFlyout(rememberPosition: false);
+
+    private void ShowFlyout(bool rememberPosition)
     {
         if (IsDocked)
         {
@@ -733,21 +842,24 @@ public sealed partial class MainWindow : Window
             if (_collapsed) ShowExpanded();
             Activate();
             _mode = PanelMode.Desktop;
+            UpdateRaiseButton();
             SearchBox.Focus(FocusState.Programmatic);
             App.Log("[win] docked flyout expanded");
             return;
         }
 
-        WindowChrome.KeepAtBottom = false;
+        WindowChrome.SetKeepAtBottom(_hwnd, false);
         if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = true;
 
-        PositionNearTray();
+        if (rememberPosition) RestoreFlyoutPosition();
+        else PositionNearTray();
         _appWindow.Show();
         EnsureChrome();
         Activate();
         _mode = PanelMode.Flyout;
+        UpdateRaiseButton();
         SearchBox.Focus(FocusState.Programmatic);
-        App.Log("[win] flyout shown");
+        App.Log($"[win] flyout shown ({(rememberPosition ? "saved" : "bottom-right")})");
     }
 
     private void PositionNearTray()
@@ -762,8 +874,37 @@ public sealed partial class MainWindow : Window
         _appWindow.Move(new PointInt32(x, y));
     }
 
+    /// <summary>Reopens an undocked panel where the user left it, clamped to the current display.</summary>
+    private void RestoreFlyoutPosition()
+    {
+        var area = DisplayArea.GetFromWindowId(_appWindow.Id, DisplayAreaFallback.Nearest)?.WorkArea;
+        if (area is null)
+        {
+            PositionNearTray();
+            return;
+        }
+
+        var size = _appWindow.Size;
+        var right = area.Value.X + area.Value.Width;
+        var bottom = area.Value.Y + area.Value.Height;
+        var x = Box.Window.X is double savedX
+            ? (int)savedX
+            : right - size.Width - 12;
+        var y = Box.Window.Y is double savedY
+            ? (int)savedY
+            : bottom - size.Height - 12;
+
+        x = Math.Clamp(x, area.Value.X, Math.Max(area.Value.X, right - size.Width));
+        y = Math.Clamp(y, area.Value.Y, Math.Max(area.Value.Y, bottom - size.Height));
+        _appWindow.Move(new PointInt32(x, y));
+    }
+
     public void SinkToDesktop()
     {
+        // A desktop panel is already where this action puts it; don't snap it back to the last
+        // saved placement just because the header button was clicked.
+        var wasDesktop = !IsDocked && _mode == PanelMode.Desktop;
+
         // "Back to desktop" also releases the edge dock.
         if (IsDocked)
         {
@@ -779,8 +920,8 @@ public sealed partial class MainWindow : Window
                 PlaceDocked(width, height);
             }
 
-            Data.Settings.Dock = DockSide.None;
-            Data.Settings.DockWidth = Math.Max(Dpi.Px(360, Dpi.ScaleFor(_hwnd)), Data.Window.Width);
+            Settings.Dock = DockSide.None;
+            Settings.DockWidth = Math.Max(Dpi.Px(360, Dpi.ScaleFor(_hwnd)), Box.Window.Width);
             _store.MarkDirty();
             StopDockPolling();
             SetDockedTopmost(false);
@@ -793,26 +934,35 @@ public sealed partial class MainWindow : Window
             GetWindowRect(_hwnd, out var rect);
             PlaceDocked(rect.Right - rect.Left, rect.Bottom - rect.Top);
         }
-        else
+        else if (!wasDesktop)
         {
             var scale = Dpi.ScaleFor(_hwnd);
             _appWindow.Move(new PointInt32(
-                Data.Window.X is double x ? (int)x : Dpi.Px(200, scale),
-                Data.Window.Y is double y ? (int)y : Dpi.Px(160, scale)));
+                Box.Window.X is double x ? (int)x : Dpi.Px(200, scale),
+                Box.Window.Y is double y ? (int)y : Dpi.Px(160, scale)));
         }
 
-        WindowChrome.KeepAtBottom = true;
+        WindowChrome.SetKeepAtBottom(_hwnd, true);
         _appWindow.Show();
         SetWindowPos(_hwnd, new IntPtr(1), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         EnsureChrome();
         _mode = PanelMode.Desktop;
+        UpdateRaiseButton();
         App.Log("[win] sunk to desktop (bottom-most)");
     }
 
     private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
     {
-        if (args.WindowActivationState != WindowActivationState.Deactivated) EnsureChrome();
+        if (args.WindowActivationState != WindowActivationState.Deactivated)
+            EnsureChrome();
 
+        // Only a real pointer activation means the user picked this box. Programmatic startup
+        // activation can land on an unrelated visible strip (e.g. a right-docked box); persisting
+        // that would overwrite the restored active box.
+        if (args.WindowActivationState == WindowActivationState.PointerActivated)
+            _manager.SetActive(this);
+
+        if (Settings.Pinned) return;
         if (_suppressAutoHide) return;
         if (args.WindowActivationState != WindowActivationState.Deactivated) return;
         if (_mode != PanelMode.Flyout) return;
@@ -824,8 +974,114 @@ public sealed partial class MainWindow : Window
 
     private void OnHideClick(object sender, RoutedEventArgs e)
     {
+        // X is "collapse": a docked panel becomes its capsule; a free panel goes to the tray.
+        // The header's square-arrow button is the explicit hide-to-tray action.
+        if (IsDocked)
+        {
+            HideCollapsed(force: true);
+            return;
+        }
+
+        SavePlacement();
         _appWindow.Hide();
         _mode = PanelMode.Hidden;
+        UpdateRaiseButton();
+    }
+
+    /// <summary>Persists the free-floating panel's current spot before hiding it.</summary>
+    private void SavePlacement()
+    {
+        if (IsDocked) return;
+        if (!GetWindowRect(_hwnd, out var rect)) return;
+
+        Box.Window.X = rect.Left;
+        Box.Window.Y = rect.Top;
+        if (!AutoFitEnabled)
+        {
+            Box.Window.Width = rect.Right - rect.Left;
+            Box.Window.Height = rect.Bottom - rect.Top;
+        }
+
+        _store.MarkDirty();
+    }
+
+    // =====================================================================
+    // Box manager hooks
+    // =====================================================================
+
+    /// <summary>
+    /// Reveals a docked window without activating it. Capsule boxes only need their separate
+    /// capsule window, but a strip lives inside the parked panel and must be shown.
+    /// </summary>
+    internal void ShowParked()
+    {
+        if (!IsDocked) return;
+        // SW_SHOWNOACTIVATE, not AppWindow.Show(): showing the parked windows must not steal
+        // activation from the box that is actually being restored.
+        ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+        UpdateRaiseButton();
+    }
+
+    /// <summary>Initial show: a docked box stays collapsed (capsule visible); others appear on the desktop.</summary>
+    internal void ShowStartup()
+    {
+        if (IsDocked)
+        {
+            _appWindow.Show();
+            Activate();
+            UpdateRaiseButton();
+            return;
+        }
+
+        _appWindow.Show();
+        EnsureChrome();
+        Activate();
+        UpdateRaiseButton();
+    }
+
+    /// <summary>User picked this box from the tray: expand a docked panel, otherwise show a flyout.</summary>
+    internal void ShowForUser()
+    {
+        if (IsDocked)
+        {
+            _appWindow.Show();
+            if (_collapsed) ShowExpanded();
+            _mode = PanelMode.Desktop;
+            Activate();
+            UpdateRaiseButton();
+            return;
+        }
+
+        ShowFlyout();
+    }
+
+    internal void OpenSettings() => OnSettingsClick(this, new RoutedEventArgs());
+
+    internal void UpdateBoxName()
+    {
+        BoxName.Text = Box.Name;
+        Title = $"TBox · {Box.Name}";
+    }
+
+    internal void CloseForDelete()
+    {
+        try
+        {
+            _capsule?.Close();
+            _capsule = null;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            App.Log("[box] close failed: " + ex.Message);
+        }
+    }
+
+    internal void ApplyThemeToCurrentWindow()
+    {
+        Root.RequestedTheme = AppTheme.Current;
+        UpdatePinButton();
+        _capsule?.ApplyTheme();
     }
 
     // =====================================================================
@@ -834,10 +1090,8 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme()
     {
-        AppTheme.Resolve(Data.Settings.Theme);
-        Root.RequestedTheme = AppTheme.Current;
-        _capsule?.ApplyTheme();
         _store.MarkDirty();
+        _manager.ApplyThemeAll();
     }
 
     private async void OnSettingsClick(object sender, RoutedEventArgs e)
@@ -873,20 +1127,20 @@ public sealed partial class MainWindow : Window
         {
             Content = "胶囊：显示 3 个常用工具的图标",
             GroupName = "collapsedStyle",
-            IsChecked = Data.Settings.CollapsedStyle == CollapsedStyle.Capsule
+            IsChecked = Settings.CollapsedStyle == CollapsedStyle.Capsule
         };
         var strip = new RadioButton
         {
             Content = "竖条：只留一条细边，悬停展开",
             GroupName = "collapsedStyle",
-            IsChecked = Data.Settings.CollapsedStyle == CollapsedStyle.Strip
+            IsChecked = Settings.CollapsedStyle == CollapsedStyle.Strip
         };
 
         var orientationBox = new ComboBox
         {
             Width = 210,
             ItemsSource = new[] { "自动（左右竖排 / 顶边横排）", "竖排", "横排" },
-            SelectedIndex = (int)Data.Settings.CapsuleOrientation,
+            SelectedIndex = (int)Settings.CapsuleOrientation,
             IsEnabled = capsule.IsChecked == true
         };
         var orientationRow = new StackPanel
@@ -909,7 +1163,7 @@ public sealed partial class MainWindow : Window
 
         var autoFit = new ToggleSwitch
         {
-            IsOn = Data.Settings.AutoFitWindow,
+            IsOn = Settings.AutoFitWindow,
             Header = "随图标数量自适应窗口大小",
             OnContent = "开",
             OffContent = "关"
@@ -919,7 +1173,7 @@ public sealed partial class MainWindow : Window
         {
             Width = 88,
             ItemsSource = Enumerable.Range(1, 8).ToList(),
-            SelectedItem = Math.Clamp(Data.Settings.AutoFitMaxRows, 1, 8),
+            SelectedItem = Math.Clamp(Settings.AutoFitMaxRows, 1, 8),
             IsEnabled = autoFit.IsOn
         };
 
@@ -975,7 +1229,7 @@ public sealed partial class MainWindow : Window
 
         var hotkey = new TextBlock
         {
-            Text = _shell is { HotkeyRegistered: true }
+            Text = _manager.HotkeyRegistered
                 ? "Ctrl+Alt+T · 已注册"
                 : "Ctrl+Alt+T · 被其它程序占用",
             FontSize = 12,
@@ -1010,21 +1264,21 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(Header("版本"));
         panel.Children.Add(new TextBlock { Text = versionText, FontSize = 12, Opacity = 0.7 });
 
-        if (!await ShowDialogAsync("设置", panel, 640, "保存", "取消")) return;
+        if (!await ShowDialogAsync($"设置 · {Box.Name}", panel, 760, "保存", "取消")) return;
 
         Data.Settings.Theme = themeDark.IsChecked == true ? ThemeMode.Dark
             : themeLight.IsChecked == true ? ThemeMode.Light
             : ThemeMode.System;
         ApplyTheme();
 
-        var autoFitWasOn = Data.Settings.AutoFitWindow;
+        var autoFitWasOn = Settings.AutoFitWindow;
         var maxRowsValue = maxRows.SelectedItem is int rows
             ? Math.Clamp(rows, 1, 8)
-            : Data.Settings.AutoFitMaxRows;
-        var autoFitChanged = autoFit.IsOn != autoFitWasOn || maxRowsValue != Data.Settings.AutoFitMaxRows;
+            : Settings.AutoFitMaxRows;
+        var autoFitChanged = autoFit.IsOn != autoFitWasOn || maxRowsValue != Settings.AutoFitMaxRows;
 
-        Data.Settings.AutoFitWindow = autoFit.IsOn;
-        Data.Settings.AutoFitMaxRows = maxRowsValue;
+        Settings.AutoFitWindow = autoFit.IsOn;
+        Settings.AutoFitMaxRows = maxRowsValue;
 
         // Re-fit before a possible collapse, so the dock transition already uses the new height.
         if (!autoFit.IsOn && autoFitWasOn) RestorePreferredSize();
@@ -1036,11 +1290,11 @@ public sealed partial class MainWindow : Window
             2 => CapsuleOrientation.Horizontal,
             _ => CapsuleOrientation.Auto
         };
-        var orientationChanged = orientationValue != Data.Settings.CapsuleOrientation;
-        Data.Settings.CapsuleOrientation = orientationValue;
+        var orientationChanged = orientationValue != Settings.CapsuleOrientation;
+        Settings.CapsuleOrientation = orientationValue;
 
         var nextStyle = capsule.IsChecked == true ? CollapsedStyle.Capsule : CollapsedStyle.Strip;
-        var styleChanged = nextStyle != Data.Settings.CollapsedStyle;
+        var styleChanged = nextStyle != Settings.CollapsedStyle;
         if (styleChanged) SetCollapsedStyle(nextStyle);
         else if (orientationChanged) ApplyCapsuleOrientation();
 
@@ -1051,7 +1305,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnImportClick(object sender, RoutedEventArgs e)
     {
-        var existing = Data.Groups.SelectMany(g => g.Items)
+        var existing = Box.Groups.SelectMany(g => g.Items)
             .Select(i => i.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -1172,8 +1426,8 @@ public sealed partial class MainWindow : Window
 
         if (sender is UIElement element) element.ReleasePointerCapture(e.Pointer);
         GetWindowRect(_hwnd, out var rect);
-        Data.Window.Width = rect.Right - rect.Left;
-        Data.Window.Height = rect.Bottom - rect.Top;
+        Box.Window.Width = rect.Right - rect.Left;
+        Box.Window.Height = rect.Bottom - rect.Top;
         _store.MarkDirty();
         ApplyShape();
         e.Handled = true;

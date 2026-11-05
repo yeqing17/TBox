@@ -41,21 +41,42 @@ public enum ThemeMode
     Dark = 2
 }
 
-/// <summary>Root object persisted to %APPDATA%\TBox\data.json.</summary>
+/// <summary>Root object persisted to %APPDATA%\TBox\data.json (schema v2).</summary>
 public sealed class TBoxData
 {
-    public int Version { get; set; } = 1;
+    public const int CurrentVersion = 2;
+
+    public int Version { get; set; } = CurrentVersion;
+
+    /// <summary>Settings shared by every box: theme, startup behaviour, active box.</summary>
     public AppSettings Settings { get; set; } = new();
-    public WindowPlacement Window { get; set; } = new();
-    public ObservableCollection<ItemGroup> Groups { get; set; } = new();
+
+    public ObservableCollection<BoxData> Boxes { get; set; } = new();
 }
 
 public sealed class AppSettings
 {
     public ThemeMode Theme { get; set; } = ThemeMode.System;
-    public bool TopMost { get; set; }
     public bool MinimizeToTray { get; set; } = true;
     public bool RunAtStartup { get; set; }
+
+    /// <summary>Box whose window is shown/activated first.</summary>
+    public string? ActiveBoxId { get; set; }
+}
+
+/// <summary>A toolbox instance: its own groups, window placement, dock and capsule settings.</summary>
+public sealed class BoxData
+{
+    public string Id { get; set; } = ItemGroup.NewId();
+    public string Name { get; set; } = "工具箱";
+    public BoxSettings Settings { get; set; } = new();
+    public WindowPlacement Window { get; set; } = new();
+    public ObservableCollection<ItemGroup> Groups { get; set; } = new();
+}
+
+public sealed class BoxSettings
+{
+    /// <summary>Group restored when the box opens.</summary>
     public string? LastGroupId { get; set; }
 
     /// <summary>Edge the panel is docked to; None means free-floating.</summary>
@@ -75,6 +96,9 @@ public sealed class AppSettings
 
     /// <summary>Row cap for auto-fit; beyond it the window stops growing and the grid scrolls.</summary>
     public int AutoFitMaxRows { get; set; } = 4;
+
+    /// <summary>Pinned panels ignore auto-collapse and are restored expanded on startup.</summary>
+    public bool Pinned { get; set; }
 }
 
 public sealed class WindowPlacement
@@ -168,6 +192,10 @@ public sealed class AppItem : INotifyPropertyChanged
             Raise(nameof(PlaceholderVisibility));
         }
     }
+
+    /// <summary>Physical pixels the current Icon was decoded at; windows on different DPIs share it.</summary>
+    [JsonIgnore]
+    public int IconDecodePixels { get; set; }
 
     [JsonIgnore]
     public Visibility PlaceholderVisibility => _icon is null ? Visibility.Visible : Visibility.Collapsed;

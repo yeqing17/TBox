@@ -24,7 +24,6 @@ public sealed partial class MainWindow
     // GetWindowRect, GetCursorPos, AppWindow.MoveAndResize — is physical pixels, so these go through
     // Dip() before they meet a pixel.
     private const int SnapDistance = 16;
-    private const int DockPollMs = 50;
     private const int MinExpandedWidth = 360;
     private const int StripVisibleWidth = 16;
     private const int CapsuleGap = 8;
@@ -34,7 +33,6 @@ public sealed partial class MainWindow
     private static readonly TimeSpan CapsuleHoverDelay = TimeSpan.FromMilliseconds(650);
     private static readonly TimeSpan LeaveCollapseDelay = TimeSpan.FromMilliseconds(400);
 
-    private DispatcherQueueTimer? _dockTimer;
     private DateTime _hoverSince = DateTime.MinValue;
     private DateTime _leaveSince = DateTime.MinValue;
     private bool _collapsed;
@@ -42,23 +40,15 @@ public sealed partial class MainWindow
     private bool _suppressCollapse;
     private CapsuleWindow? _capsule;
 
-    private DockSide CurrentDock => Data.Settings.Dock;
+    private DockSide CurrentDock => Settings.Dock;
     private bool IsDocked => CurrentDock != DockSide.None;
-    private bool UseCapsule => Data.Settings.CollapsedStyle == CollapsedStyle.Capsule;
+    private bool UseCapsule => Settings.CollapsedStyle == CollapsedStyle.Capsule;
 
     /// <summary>DPI scale of the monitor the panel is on (1.0 = 100%, 2.0 = 200%…).</summary>
     private double Scale => Dpi.ScaleFor(_hwnd);
 
     /// <summary>A design DIP length as physical pixels on the panel's current monitor.</summary>
     private int Dip(double value) => Dpi.Px(value, Scale);
-
-    private void InitDocking()
-    {
-        _dockTimer = DispatcherQueue.CreateTimer();
-        _dockTimer.Interval = TimeSpan.FromMilliseconds(DockPollMs);
-        _dockTimer.IsRepeating = true;
-        _dockTimer.Tick += (_, _) => OnDockTick();
-    }
 
     private RectInt32 WorkArea()
         => DisplayArea.GetFromWindowId(_appWindow.Id, DisplayAreaFallback.Nearest)?.WorkArea
@@ -141,7 +131,7 @@ public sealed partial class MainWindow
         {
             DockSide.Right => area.X + area.Width - width,
             DockSide.Top => Math.Clamp(
-                (int)(Data.Window.X ?? area.X + (area.Width - width) / 2),
+                (int)(Box.Window.X ?? area.X + (area.Width - width) / 2),
                 area.X,
                 Math.Max(area.X, area.X + area.Width - width)),
             _ => area.X
@@ -153,7 +143,7 @@ public sealed partial class MainWindow
         var area = WorkArea();
         return CurrentDock == DockSide.Top
             ? area.Y
-            : (int)(Data.Window.Y ?? area.Y + Dip(120));
+            : (int)(Box.Window.Y ?? area.Y + Dip(120));
     }
 
     private void MoveTo(int x, int y, int width, int height)
@@ -245,18 +235,18 @@ public sealed partial class MainWindow
 
         var side = ComputeSnapSide(rect);
 
-        Data.Settings.Dock = side;
-        Data.Window.Y = side == DockSide.Top ? area.Y : rect.Top;
+        Settings.Dock = side;
+        Box.Window.Y = side == DockSide.Top ? area.Y : rect.Top;
         // Auto-fit derives the size from the icon count on every update. Keep the user's preferred
         // width/height untouched so turning the feature off restores them. DockWidth is only the
         // auto-fit-off restore width for side docks, so it must not be overwritten with a fit size.
         if (!AutoFitEnabled)
         {
-            Data.Window.Height = height;
-            Data.Window.Width = width;
-            if (side is DockSide.Left or DockSide.Right) Data.Settings.DockWidth = width;
+            Box.Window.Height = height;
+            Box.Window.Width = width;
+            if (side is DockSide.Left or DockSide.Right) Settings.DockWidth = width;
         }
-        Data.Window.X = side switch
+        Box.Window.X = side switch
         {
             DockSide.Left => area.X,
             DockSide.Right => area.X + area.Width - width,
@@ -283,41 +273,54 @@ public sealed partial class MainWindow
 
     private void ApplyDockOnStartup(bool forceRight = false)
     {
-        if (forceRight) Data.Settings.Dock = DockSide.Right;
+        if (forceRight) Settings.Dock = DockSide.Right;
         if (!IsDocked) return;
 
         var area = WorkArea();
-        var dockWidth = (int)Math.Max(Dip(MinExpandedWidth), Data.Settings.DockWidth);
-        Data.Settings.DockWidth = dockWidth;
+        var dockWidth = (int)Math.Max(Dip(MinExpandedWidth), Settings.DockWidth);
+        Settings.DockWidth = dockWidth;
 
         var (width, height) = ExpandedSizePx();
 
         if (CurrentDock == DockSide.Top)
         {
-            var x = Data.Window.X is double savedX
+            var x = Box.Window.X is double savedX
                 ? (int)savedX
                 : area.X + (area.Width - width) / 2;
-            Data.Window.X = Math.Clamp(x, area.X, Math.Max(area.X, area.X + area.Width - width));
-            Data.Window.Y = area.Y;
+            Box.Window.X = Math.Clamp(x, area.X, Math.Max(area.X, area.X + area.Width - width));
+            Box.Window.Y = area.Y;
         }
         else
         {
-            Data.Window.Y = ExpandedY();
+            Box.Window.Y = ExpandedY();
         }
 
         SetDockedTopmost(true);
         PlaceDocked(width, height);
 
         StartDockPolling();
-        HideCollapsed(force: true, animate: false);
-        App.Log($"[dock] restored side={CurrentDock} width={width} x={Data.Window.X} y={Data.Window.Y} h={height}");
+        if (Settings.Pinned)
+        {
+            // A pinned panel comes back expanded; the capsule is not created until it is unpinned.
+            _collapsed = false;
+            _capsule?.Hide();
+            ShowCollapsedBar(false);
+            Panel.Visibility = Visibility.Visible;
+            PlaceDocked(width, height);
+        }
+        else
+        {
+            HideCollapsed(force: true, animate: false);
+        }
+
+        App.Log($"[dock] restored side={CurrentDock} width={width} x={Box.Window.X} y={Box.Window.Y} h={height} pinned={Settings.Pinned}");
     }
 
     private void SetDockedTopmost(bool docked)
     {
         if (_appWindow.Presenter is OverlappedPresenter presenter) presenter.IsAlwaysOnTop = docked;
 
-        WindowChrome.KeepAtBottom = !docked;
+        WindowChrome.SetKeepAtBottom(_hwnd, !docked);
 
         var insertAfter = new IntPtr(docked ? -1 /* HWND_TOPMOST */ : -2 /* HWND_NOTOPMOST */);
         SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -333,19 +336,20 @@ public sealed partial class MainWindow
 
     private void StartDockPolling()
     {
-        if (_dockTimer is null || _dockTimer.IsRunning) return;
         _hoverSince = DateTime.MinValue;
         _leaveSince = DateTime.MinValue;
-        _dockTimer.Start();
+        _manager.DockPoll.Register(this);
     }
 
-    private void StopDockPolling() => _dockTimer?.Stop();
+    private void StopDockPolling() => _manager.DockPoll.Unregister(this);
 
     // ------------------------------------------------------------------ state machine
 
-    private void OnDockTick()
+    internal void PollDock()
     {
         if (!IsDocked || _dragging || _resizing) return;
+        // Hidden-to-tray docked panels must stay hidden instead of being collapsed into a capsule.
+        if (_mode == PanelMode.Hidden) return;
 
         GetCursorPos(out var cursor);
 
@@ -423,7 +427,10 @@ public sealed partial class MainWindow
             return;
         }
 
-        if (insidePanel)
+        // A file dragged in from Explorer leaves the panel with the left button held. Keep the
+        // panel expanded until the drop/button release; otherwise the 400ms leave timer collapses
+        // it before the cursor reaches the drop target.
+        if (insidePanel || NativeMethods.IsLeftButtonDown())
         {
             _leaveSince = DateTime.MinValue;
             return;
@@ -439,7 +446,7 @@ public sealed partial class MainWindow
 
     private bool HoldsOpen()
     {
-        if (_suppressCollapse || _dragging || _resizing) return true;
+        if (Settings.Pinned || _suppressCollapse || _dragging || _resizing) return true;
         return Content.XamlRoot is { } root && FocusManager.GetFocusedElement(root) is TextBox;
     }
 
@@ -461,7 +468,7 @@ public sealed partial class MainWindow
     /// <summary>Auto uses a vertical capsule at the sides and a horizontal one at the top.</summary>
     private CapsuleOrientation ResolveCapsuleOrientation()
     {
-        var setting = Data.Settings.CapsuleOrientation;
+        var setting = Settings.CapsuleOrientation;
         if (setting != CapsuleOrientation.Auto) return setting;
         return CurrentDock == DockSide.Top ? CapsuleOrientation.Horizontal : CapsuleOrientation.Vertical;
     }
@@ -477,6 +484,9 @@ public sealed partial class MainWindow
     {
         if (!_collapsed) return;
 
+        // Expanding from a capsule/strip is a user action even though the window Show/Activate
+        // below is programmatic; make this the active box for the tray/hotkey.
+        _manager.SetActive(this);
         _collapsed = false;
 
         var (width, height) = ExpandedSizePx();
@@ -499,7 +509,8 @@ public sealed partial class MainWindow
             ? (UseCapsule ? ParkedY(height) : StripParkedY(height))
             : y;
         _ = SlideToAsync(fromX, fromY, x, y, width, height);
-        App.Log($"[dock] expanded ({Data.Settings.CollapsedStyle})");
+        UpdateRaiseButton();
+        App.Log($"[dock] expanded ({Settings.CollapsedStyle})");
     }
 
     private async void HideCollapsed(bool force = false, bool animate = true)
@@ -575,8 +586,10 @@ public sealed partial class MainWindow
 
         try
         {
-            const int frames = 18;
-            const int frameMs = 8;
+            // One move per 60Hz frame (10 × 16ms = 160ms) instead of 18 × 8ms. The old cadence
+            // issued more window moves than the compositor can present, which stutters on 4K.
+            const int frames = 10;
+            const int frameMs = 16;
 
             for (var i = 1; i <= frames; i++)
             {
@@ -614,7 +627,7 @@ public sealed partial class MainWindow
 
     // ------------------------------------------------------------------ flyout helpers
 
-    private void SetCollapseSuppressed(bool value) => _suppressCollapse = value;
+    internal void SetCollapseSuppressed(bool value) => _suppressCollapse = value;
 
     private void OnCollapsedBarPressed(object sender, PointerRoutedEventArgs e)
     {

@@ -21,12 +21,14 @@ internal sealed class CapsuleWindow
     // Every length below is a XAML DIP. The window itself is sized in physical pixels, so they are
     // multiplied by the monitor's scale factor (SetScale) before they reach AppWindow.
     public const int Thickness = 56;
-    private const int IconSize = 34;
+    // Multiples of 4 stay on whole pixels at 125%/150%/200% display scales; 34 left a half-pixel
+    // edge at 125%, which made the capsule icons look aliased.
+    private const int IconSize = 36;
     private const int IconGap = 6;
     private const int PaddingY = 10;
     private const int PaddingX = 9;
     private const int MaxItems = 3;
-    public const int ExpandTabHeight = 38;
+    public const int ExpandTabHeight = 40;
     private const int ExpandStripSize = 32;
     private const int SeparatorSpace = 7;                  // 1px separator + 6px gap
     private const int StripSpace = ExpandStripSize + 6;    // expand tab + its leading gap
@@ -165,7 +167,8 @@ internal sealed class CapsuleWindow
             BorderThickness = new Thickness(1),
             Padding = new Thickness(0, PaddingY, 0, 6),
             Child = _content,
-            RequestedTheme = AppTheme.Current
+            RequestedTheme = AppTheme.Current,
+            UseLayoutRounding = true
         };
         root.Background = new SolidColorBrush(AppTheme.IsDark
             ? Color.FromArgb(235, 30, 30, 30)
@@ -353,6 +356,13 @@ internal sealed class CapsuleWindow
     {
         SetExpandHover(false);
         _window.AppWindow.Hide();
+    }
+
+    /// <summary>Destroys the capsule window when its box is deleted.</summary>
+    public void Close()
+    {
+        try { _window.Close(); } catch { }
+        WindowChrome.Forget(Handle);
     }
 
     public bool IsVisible => _window.AppWindow.IsVisible;

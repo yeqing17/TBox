@@ -5,7 +5,7 @@
     xmlns:models="using:TBox.Models"
     Title="TBox">
 
-    <Grid x:Name="Root" RequestedTheme="Dark" Background="Transparent">
+    <Grid x:Name="Root" RequestedTheme="Dark" Background="Transparent" UseLayoutRounding="True">
         <Border x:Name="CollapsedBar" Visibility="Collapsed" Width="16"
                 HorizontalAlignment="Left" CornerRadius="4"
                 Background="{ThemeResource PanelBg}"
@@ -41,11 +41,13 @@
                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
                                 VerticalAlignment="Center" IsHitTestVisible="False">
                         <Image x:Name="HeaderLogo" Width="20" Height="20" Stretch="Uniform" />
-                        <TextBlock Text="TBox" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <TextBlock x:Name="BoxName" Text="TBox" FontSize="13" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" MaxWidth="140" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
 
-                    <Grid Grid.Column="1" MinWidth="120" MaxWidth="300" Margin="18,0,12,0"
-                          HorizontalAlignment="Stretch" VerticalAlignment="Center">
+                    <Grid x:Name="SearchHost" Grid.Column="1" MinWidth="120" MaxWidth="300" Margin="18,0,12,0"
+                          HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                          Visibility="Collapsed">
                         <TextBox x:Name="SearchBox" Height="32" Padding="10,8,10,3" FontSize="12.5"
                                  VerticalContentAlignment="Top" HorizontalAlignment="Stretch"
                                  Visibility="Collapsed"
@@ -58,8 +60,12 @@
                     </Grid>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                        <Button x:Name="PinButton" Style="{StaticResource PanelIconButton}" Click="OnPinClick"
+                                ToolTipService.ToolTip="钉住">
+                            <FontIcon Glyph="&#xE718;" FontSize="14" />
+                        </Button>
                         <Button x:Name="SearchToggle" Style="{StaticResource PanelIconButton}" Click="OnSearchToggleClick"
-                                ToolTipService.ToolTip="搜索（Ctrl+F）">
+                                ToolTipService.ToolTip="搜索">
                             <FontIcon Glyph="&#xE721;" FontSize="14" />
                         </Button>
                         <Button x:Name="AddButton" Style="{StaticResource AccentButtonStyle}"
@@ -67,8 +73,8 @@
                                 ToolTipService.ToolTip="添加工具">
                             <FontIcon Glyph="&#xE710;" FontSize="13" />
                         </Button>
-                        <Button Style="{StaticResource PanelIconButton}" Click="OnRaiseClick"
-                                ToolTipService.ToolTip="弹出面板 / 放回桌面">
+                        <Button x:Name="RaiseButton" Style="{StaticResource PanelIconButton}" Click="OnRaiseClick"
+                                ToolTipService.ToolTip="隐藏到托盘">
                             <FontIcon Glyph="&#xE8A7;" FontSize="14" />
                         </Button>
                         <Button Style="{StaticResource PanelIconButton}" Click="OnSettingsClick"
@@ -76,7 +82,7 @@
                             <FontIcon Glyph="&#xE713;" FontSize="14" />
                         </Button>
                         <Button Style="{StaticResource PanelIconButton}" Click="OnHideClick"
-                                ToolTipService.ToolTip="收起（托盘 Ctrl+Alt+T 唤回）">
+                                ToolTipService.ToolTip="收起">
                             <FontIcon Glyph="&#xE8BB;" FontSize="14" />
                         </Button>
                     </StackPanel>
@@ -94,6 +100,7 @@
                               Background="Transparent" BorderThickness="0" Padding="0"
                               VerticalAlignment="Center"
                               SelectionChanged="OnTabChanged"
+                              RightTapped="OnTabRightTapped"
                               ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                               ScrollViewer.VerticalScrollBarVisibility="Disabled">
                         <ListView.ItemsPanel>

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -60,11 +61,23 @@ public static class ShellIcons
 
     private static readonly Guid IidImageList = new("46EB5926-582E-4017-9FDF-E8998DAA0950");
 
+    // Four box windows can load icons at the same time; serialize work per cache file so the
+    // same item is not extracted twice and the temporary PNG write does not race.
+    private static readonly ConcurrentDictionary<string, object> CacheLocks = new();
+
     /// <summary>Returns the cached PNG path, extracting it first when needed.</summary>
     public static string? EnsureIcon(AppItem item)
     {
         var cachePath = DataStore.Instance.IconPathFor(item);
+        var gate = CacheLocks.GetOrAdd(cachePath, _ => new object());
+        lock (gate)
+        {
+            return EnsureIconCore(item, cachePath);
+        }
+    }
 
+    private static string? EnsureIconCore(AppItem item, string cachePath)
+    {
         if (File.Exists(cachePath) && IsCacheFresh(cachePath, item))
             return cachePath;
 

@@ -7,7 +7,7 @@ public partial class App : Application
     // Log file under %LOCALAPPDATA%/TBox, created on demand (also used by CI smoke tests).
     private static readonly string LogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TBox", "app.log");
-    private Window? _window;
+    private BoxManager? _manager;
     private Mutex? _mutex;
 
     internal static void Log(string message)
@@ -48,9 +48,9 @@ public partial class App : Application
         }
         try
         {
-            _window = new MainWindow();
-            Log("MainWindow created");
-            _window.Activate();
+            _manager = new BoxManager();
+            Log("BoxManager created");
+            _manager.Start();
             Log("Activated");
         }
         catch (Exception ex)
