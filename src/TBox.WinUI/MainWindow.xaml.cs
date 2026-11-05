@@ -535,7 +535,11 @@ public sealed partial class MainWindow : Window
         var capsuleMenu = new MenuFlyoutSubItem
         {
             Text = "胶囊",
-            Icon = new FontIcon { Glyph = "\uE718" }
+            Icon = new FontIcon
+            {
+                Glyph = "\U0001F48A",
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe UI Symbol")
+            }
         };
         var group = Box.Groups.FirstOrDefault(g => g.Items.Contains(item));
         if (group is not null)
@@ -544,7 +548,11 @@ public sealed partial class MainWindow : Window
             var pin = new MenuFlyoutItem
             {
                 Text = isPinned ? "取消固定到胶囊" : "固定到胶囊",
-                Icon = new FontIcon { Glyph = "\uE718" }
+                Icon = new FontIcon
+                {
+                    Glyph = "\U0001F48A",
+                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe UI Symbol")
+                }
             };
             pin.Click += async (_, _) => await ToggleCapsulePinAsync(item, group);
             capsuleMenu.Items.Add(pin);
