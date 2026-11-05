@@ -157,6 +157,15 @@
                                                     Visibility="{x:Bind PlaceholderVisibility, Mode=OneWay}">
                                                 <FontIcon Glyph="&#xE7C3;" FontSize="18" Opacity="0.5" />
                                             </Border>
+                                            <Border Width="14" Height="14" CornerRadius="7"
+                                                    Background="#E61E1E1E" BorderBrush="#40FFFFFF"
+                                                    BorderThickness="1"
+                                                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                    Margin="-3,-3,0,0"
+                                                    Visibility="{x:Bind CapsulePinVisibility, Mode=OneWay}">
+                                                <FontIcon Glyph="&#xE718;" FontSize="8"
+                                                          Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                                            </Border>
                                         </Grid>
                                         <TextBlock Text="{x:Bind Name, Mode=OneWay}" FontSize="12"
                                                    TextAlignment="Center" TextWrapping="Wrap"

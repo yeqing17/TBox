@@ -129,6 +129,9 @@ public sealed class ItemGroup : INotifyPropertyChanged
 
     public ObservableCollection<AppItem> Items { get; set; } = new();
 
+    /// <summary>Tools explicitly pinned to the capsule; empty means the first three items.</summary>
+    public List<string> CapsuleItemIds { get; set; } = new();
+
     /// <summary>Item count shown on the tab; kept in sync by the view.</summary>
     [JsonIgnore]
     public int Count => Items.Count;
@@ -148,6 +151,7 @@ public sealed class AppItem : INotifyPropertyChanged
     private string _name = string.Empty;
     private ImageSource? _icon;
     private bool _isMissing;
+    private bool _capsulePinned;
 
     public string Id { get; set; } = ItemGroup.NewId();
     public string Name
@@ -215,6 +219,23 @@ public sealed class AppItem : INotifyPropertyChanged
 
     [JsonIgnore]
     public Visibility MissingVisibility => _isMissing ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Whether this tool is one of the current group's capsule picks (view-only state).</summary>
+    [JsonIgnore]
+    public bool IsCapsulePinned
+    {
+        get => _capsulePinned;
+        set
+        {
+            if (_capsulePinned == value) return;
+            _capsulePinned = value;
+            Raise();
+            Raise(nameof(CapsulePinVisibility));
+        }
+    }
+
+    [JsonIgnore]
+    public Visibility CapsulePinVisibility => _capsulePinned ? Visibility.Visible : Visibility.Collapsed;
 
     [JsonIgnore]
     public string? IconPath { get; set; }

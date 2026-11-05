@@ -224,6 +224,14 @@ public sealed class DataStore
                     if (string.IsNullOrWhiteSpace(item.Name))
                         item.Name = Path.GetFileNameWithoutExtension(item.Path);
                 }
+
+                group.CapsuleItemIds ??= new();
+                group.CapsuleItemIds = group.CapsuleItemIds
+                    .Where(id => !string.IsNullOrWhiteSpace(id)
+                                 && group.Items.Any(item => item.Id == id))
+                    .Distinct()
+                    .Take(3)
+                    .ToList();
             }
 
             if (box.Groups.Count == 0)
@@ -254,6 +262,7 @@ public sealed class DataStore
         if (!IsLoaded || IsReadOnly) return;
         _dirty = true;
         _saveTimer.Stop();
+        _saveTimer.Interval = TimeSpan.FromMilliseconds(400);
         _saveTimer.Start();
     }
 
@@ -262,7 +271,6 @@ public sealed class DataStore
         // Never let an un-loaded (or second-instance) store overwrite real data with the empty default.
         if (!IsLoaded || IsReadOnly) return;
 
-        _dirty = false;
         _saveTimer.Stop();
 
         try
@@ -279,11 +287,20 @@ public sealed class DataStore
             }
 
             File.Move(temp, DataFile, overwrite: true);
+
+            // Only clear dirty after the atomic replace succeeded. A failed write must remain
+            // dirty and retry; otherwise the last user change can be silently lost.
+            _dirty = false;
             LastSaveError = null;
+            _saveTimer.Interval = TimeSpan.FromMilliseconds(400);
         }
         catch (Exception ex)
         {
+            _dirty = true;
             LastSaveError = ex.Message;
+            TBox.App.Log("[data] save failed, retrying in 2s: " + ex);
+            _saveTimer.Interval = TimeSpan.FromSeconds(2);
+            _saveTimer.Start();
         }
     }
 

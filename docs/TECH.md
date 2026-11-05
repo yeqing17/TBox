@@ -1,6 +1,6 @@
 # TBox 技术方案
 
-> v2.3.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-06
+> v2.4.0 · WinUI 3（Windows App SDK 1.7）+ .NET 8 · 最后更新 2026-11-06
 
 ## 1. 结论先行
 
@@ -30,6 +30,7 @@ src/TBox.WinUI/
 ├─ MainWindow.Docking.cs      贴边 / 胶囊 / 竖条 状态机（partial）
 ├─ MainWindow.AutoFit.cs      按图标数量计算窗口尺寸（partial）
 ├─ CapsuleWindow.cs           胶囊窗口（每个贴边盒子一个，独立顶层窗口）
+├─ Views/GlobalSearchWindow.cs 跨盒子搜索面板
 ├─ Views/DialogWindow.cs      通用对话框窗口（设置/输入/导入/确认）
 ├─ Models/AppModels.cs        数据模型 + 搜索匹配
 ├─ Services/
@@ -249,6 +250,21 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 - **动画节奏**：贴边展开/收起从 18 帧 × 8ms 改为 10 帧 × 16ms（160ms），每帧一次窗口移动，
   与 60Hz 合成节奏对齐，4K 下少掉帧。
 
+### 5.6 胶囊自定义与全局搜索（v2.4）
+
+**胶囊选择**：`ItemGroup.CapsuleItemIds` 保存当前分组固定的工具 ID（最多 3 个）。`CapsuleSelection`
+按**分组内卡片顺序**筛选，保证拖拽卡片即可调整胶囊顺序；列表为空时回退到前 3 个。
+右键卡片 →「胶囊」→「固定/取消固定」写入该列表，卡片显示 14px 的 📌 角标。
+`DataStore.Normalize` 会去掉不存在/重复的 ID 并夹到 3 个；移动/移除工具时同步清理列表。
+
+**全局搜索**：`Views/GlobalSearchWindow.cs` 是独立的置顶搜索窗口（680×500 DIP，标题区无边框，
+Esc/失焦关闭）。`ShellHost` 额外注册 `Ctrl+Shift+T`（ID 0x5443），`BoxManager` 创建/复用窗口，
+托盘菜单也有「全局搜索…」。窗口遍历 `BoxManager.Boxes` 的所有分组，使用 `AppItem.Matches`，
+按名称前缀/名称/关键词/描述做简单评分，最多 50 条；结果行显示盒子 · 分组来源。
+`↑/↓` 由搜索框 KeyDown 驱动 `ListView.SelectedIndex`，Enter 启动，Esc 隐藏；点击结果也可启动。
+搜索窗口只为结果行加载 32px 图标，不写回 `AppItem.Icon`，避免把其他面板的高分辨率缓存降级。
+窗口在首次显示时置于当前活动盒子的显示器中央，并在 Show/Activate 后再 `SetWindowPos(HWND_TOPMOST)`。
+
 ## 6. 对话框
 
 早期用 `ContentDialog`，遇到两个问题：
@@ -270,7 +286,7 @@ if (msg == WM_NCCALCSIZE && wParam != IntPtr.Zero) return IntPtr.Zero;
 
 - `%APPDATA%\TBox\data.json`，camelCase、缩进、枚举存字符串；v2 结构见 PRD §7；
 - 顶层 `settings` 只放全局项（主题、开机自启、最小化到托盘、活动盒子 ID），`boxes[]` 每一项携带自己的
-  `settings`、`window`、`groups`；
+  `settings`、`window`、`groups`；每个分组另有可选的 `capsuleItemIds`（最多 3 个），空数组表示回退前 3 个；
 - 400ms 防抖保存；写 `.tmp` 后原子替换；覆盖前留 `data.bak.json`；
 - 解析失败时备份为 `data.corrupt-{时间}.json` 并用默认配置启动；
 - **`IsLoaded` 门闩**：未加载完成前禁止保存，避免第二个实例用空数据覆盖真实配置；所有窗口共享同一个
@@ -372,7 +388,7 @@ CI 的 `build.yml` 同时发布这两个目录，产物分别是
 
 - 独占全屏程序（全屏游戏）会盖住置顶窗口；
 - 非 MSIX 分发，没有系统级安装/更新；
-- 胶囊固定取当前分组前 3 个工具（显示哪些不可自定义），但方向可配置；
+- 胶囊默认取当前分组前 3 个工具；可固定最多 3 个并按分组卡片顺序显示，暂不支持独立拖拽排序；
 - 主题"跟随系统"在启动时读取，运行中切换系统主题不会实时刷新；主题本身是全局的，不能每盒不同；
 - 分组不支持拖拽排序；
 - 多盒子最多 **4 个**；所有盒子的面板窗口启动时都会创建（未贴边/隐藏的也占内存），同边多个盒子的胶囊
@@ -382,7 +398,7 @@ CI 的 `build.yml` 同时发布这两个目录，产物分别是
 ## 14. 后续
 
 1. 装好 VS「Windows 应用开发」工作负载后，去掉 `Directory.Build.targets` shim，改 MSIX 打包；
-2. 胶囊自定义显示项 + 搜索历史；
+2. 收藏 / 最近使用 / 搜索历史；全局搜索增加拼音与模糊匹配；
 3. 分组拖拽排序、多选批量操作；
 4. 多盒子第二版：胶囊/面板按需创建与回收、同边胶囊堆叠/避让、跨盒子拖拽，按预研文档继续做 N=8 压力验证；
 5. 为 `Services`（快捷方式解析、搜索匹配、存储）补回冒烟测试。

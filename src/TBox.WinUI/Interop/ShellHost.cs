@@ -12,9 +12,11 @@ internal sealed class ShellHost : IDisposable
     private const uint WM_TRAY = 0x8001;          // WM_APP + 1
     private const int WM_HOTKEY = 0x0312;
     private const int HotkeyId = 0x5442;
+    private const int SearchHotkeyId = 0x5443;
 
     private const uint MOD_ALT = 0x0001;
     private const uint MOD_CONTROL = 0x0002;
+    private const uint MOD_SHIFT = 0x0004;
     private const uint MOD_NOREPEAT = 0x4000;
     private const uint VK_T = 0x54;
 
@@ -33,16 +35,22 @@ internal sealed class ShellHost : IDisposable
     private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private readonly WndProcDelegate _wndProc;
+    private readonly uint _taskbarCreatedMessage;
     private IntPtr _hwnd;
     private IntPtr _trayIcon;
+    private string? _trayIconPath;
+    private string? _trayToolTip;
     private bool _trayAdded;
     private bool _hotkeyRegistered;
+    private bool _searchHotkeyRegistered;
 
     public event Action? HotkeyPressed;
+    public event Action? SearchHotkeyPressed;
     public event Action? TrayLeftClick;
     public event Action? TrayRightClick;
 
     public bool HotkeyRegistered => _hotkeyRegistered;
+    public bool SearchHotkeyRegistered => _searchHotkeyRegistered;
     public IntPtr Handle => _hwnd;
 
     public ShellHost()
@@ -56,22 +64,48 @@ internal sealed class ShellHost : IDisposable
             lpszClassName = ClassName,
             hInstance = GetModuleHandle(null)
         };
-        RegisterClassEx(ref wc);
+        if (RegisterClassEx(ref wc) == 0)
+            App.Log($"[shell] RegisterClassEx failed err={Marshal.GetLastWin32Error()}");
 
         _hwnd = CreateWindowEx(0, ClassName, "TBox", 0, 0, 0, 0, 0,
             new IntPtr(-3) /* HWND_MESSAGE */, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
+        if (_hwnd == IntPtr.Zero)
+            App.Log($"[shell] CreateWindowEx failed err={Marshal.GetLastWin32Error()}");
+
+        // Explorer broadcasts this after a restart; the tray icon must be added again.
+        _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
     }
 
     public bool RegisterHotkey()
     {
         _hotkeyRegistered = RegisterHotKey(_hwnd, HotkeyId, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_T);
+        if (!_hotkeyRegistered)
+            App.Log($"[shell] RegisterHotKey Ctrl+Alt+T failed err={Marshal.GetLastWin32Error()}");
+
+        _searchHotkeyRegistered = RegisterHotKey(_hwnd, SearchHotkeyId,
+            MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_T);
+        if (!_searchHotkeyRegistered)
+            App.Log($"[shell] RegisterHotKey Ctrl+Shift+T failed err={Marshal.GetLastWin32Error()}");
+
         return _hotkeyRegistered;
     }
 
     public bool AddTrayIcon(string iconPath, string tooltip)
     {
-        _trayIcon = LoadImage(IntPtr.Zero, iconPath, 1 /* IMAGE_ICON */, 0, 0,
-            0x10 /* LR_LOADFROMFILE */ | 0x40 /* LR_DEFAULTSIZE */);
+        _trayIconPath = iconPath;
+        _trayToolTip = tooltip;
+        return AddTrayIconCore();
+    }
+
+    private bool AddTrayIconCore()
+    {
+        if (_trayIcon == IntPtr.Zero && !string.IsNullOrWhiteSpace(_trayIconPath))
+        {
+            _trayIcon = LoadImage(IntPtr.Zero, _trayIconPath, 1 /* IMAGE_ICON */, 0, 0,
+                0x10 /* LR_LOADFROMFILE */ | 0x40 /* LR_DEFAULTSIZE */);
+            if (_trayIcon == IntPtr.Zero)
+                App.Log($"[shell] LoadImage failed err={Marshal.GetLastWin32Error()}");
+        }
 
         var data = new NOTIFYICONDATA
         {
@@ -81,15 +115,18 @@ internal sealed class ShellHost : IDisposable
             uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage = WM_TRAY,
             hIcon = _trayIcon,
-            szTip = tooltip
+            szTip = _trayToolTip ?? string.Empty
         };
 
         _trayAdded = Shell_NotifyIcon(0 /* NIM_ADD */, ref data);
+        if (!_trayAdded)
+            App.Log($"[shell] Shell_NotifyIcon add failed err={Marshal.GetLastWin32Error()}");
         return _trayAdded;
     }
 
     public void UpdateTooltip(string tooltip)
     {
+        _trayToolTip = tooltip;
         if (!_trayAdded) return;
         var data = new NOTIFYICONDATA
         {
@@ -99,7 +136,8 @@ internal sealed class ShellHost : IDisposable
             uFlags = NIF_TIP,
             szTip = tooltip
         };
-        Shell_NotifyIcon(1 /* NIM_MODIFY */, ref data);
+        if (!Shell_NotifyIcon(1 /* NIM_MODIFY */, ref data))
+            App.Log($"[shell] Shell_NotifyIcon modify failed err={Marshal.GetLastWin32Error()}");
     }
 
     public sealed record MenuItemSpec(string Text, int Id, bool Checked = false, bool Separator = false, bool Enabled = true);
@@ -139,9 +177,17 @@ internal sealed class ShellHost : IDisposable
 
     private IntPtr Proc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        if (msg == WM_HOTKEY && wParam.ToInt32() == HotkeyId)
+        if (_taskbarCreatedMessage != 0 && msg == _taskbarCreatedMessage)
         {
-            HotkeyPressed?.Invoke();
+            if (_trayIcon != IntPtr.Zero || _trayIconPath is not null)
+                AddTrayIconCore();
+            return IntPtr.Zero;
+        }
+
+        if (msg == WM_HOTKEY)
+        {
+            if (wParam.ToInt32() == HotkeyId) HotkeyPressed?.Invoke();
+            else if (wParam.ToInt32() == SearchHotkeyId) SearchHotkeyPressed?.Invoke();
             return IntPtr.Zero;
         }
 
@@ -168,6 +214,12 @@ internal sealed class ShellHost : IDisposable
             };
             Shell_NotifyIcon(2 /* NIM_DELETE */, ref data);
             _trayAdded = false;
+        }
+
+        if (_searchHotkeyRegistered)
+        {
+            UnregisterHotKey(_hwnd, SearchHotkeyId);
+            _searchHotkeyRegistered = false;
         }
 
         if (_hotkeyRegistered)
@@ -234,6 +286,9 @@ internal sealed class ShellHost : IDisposable
     private static extern IntPtr CreateWindowEx(uint exStyle, string className, string windowName,
         uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string message);
+
     [DllImport("user32.dll")]
     private static extern bool DestroyWindow(IntPtr hwnd);
 
@@ -249,10 +304,10 @@ internal sealed class ShellHost : IDisposable
     [DllImport("user32.dll")]
     private static extern bool UnregisterHotKey(IntPtr hwnd, int id);
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool Shell_NotifyIcon(uint message, ref NOTIFYICONDATA data);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr LoadImage(IntPtr instance, string name, uint type, int cx, int cy, uint load);
 
     [DllImport("user32.dll")]

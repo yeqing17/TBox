@@ -261,6 +261,7 @@ public sealed partial class MainWindow : Window
             ? $"{total} 个工具 · {missing} 个路径已失效"
             : $"{total} 个工具";
 
+        UpdateCapsulePins();
         foreach (var group in Box.Groups) group.RefreshCount();
 
         // Not while filtering: resizing on every keystroke would make the search box jump around.
@@ -299,10 +300,26 @@ public sealed partial class MainWindow : Window
         // loading; refresh it in place so it does not keep showing placeholders. Always use the
         // current group (not a filtered/reloaded list passed in by the caller).
         if (_capsule is { IsVisible: true })
+            _capsule.Update(CapsuleSelection(_currentGroup), ResolveCapsuleOrientation());
+    }
+
+    /// <summary>Pinned tools in group order, capped at three; otherwise the first three.</summary>
+    private static List<AppItem> CapsuleSelection(ItemGroup? group)
+    {
+        if (group is null) return new();
+
+        var ids = (group.CapsuleItemIds ?? new List<string>()).ToHashSet(StringComparer.Ordinal);
+        var pinned = group.Items.Where(item => ids.Contains(item.Id)).Take(3).ToList();
+        return pinned.Count > 0 ? pinned : group.Items.Take(3).ToList();
+    }
+
+    private void UpdateCapsulePins()
+    {
+        foreach (var group in Box.Groups)
         {
-            var capsuleItems = _currentGroup?.Items.ToList()
-                               ?? new List<AppItem>();
-            _capsule.Update(capsuleItems, ResolveCapsuleOrientation());
+            var pinned = (group.CapsuleItemIds ?? new List<string>()).ToHashSet(StringComparer.Ordinal);
+            foreach (var item in group.Items)
+                item.IsCapsulePinned = pinned.Contains(item.Id);
         }
     }
 
@@ -515,6 +532,24 @@ public sealed partial class MainWindow : Window
         var move = new MenuFlyoutItem { Text = "移动到分组", Icon = new FontIcon { Glyph = "\uE8A7" } };
         move.Click += async (_, _) => await MoveItemAsync(item);
 
+        var capsuleMenu = new MenuFlyoutSubItem
+        {
+            Text = "胶囊",
+            Icon = new FontIcon { Glyph = "\uE718" }
+        };
+        var group = Box.Groups.FirstOrDefault(g => g.Items.Contains(item));
+        if (group is not null)
+        {
+            var isPinned = group.CapsuleItemIds?.Contains(item.Id) == true;
+            var pin = new MenuFlyoutItem
+            {
+                Text = isPinned ? "取消固定到胶囊" : "固定到胶囊",
+                Icon = new FontIcon { Glyph = "\uE718" }
+            };
+            pin.Click += async (_, _) => await ToggleCapsulePinAsync(item, group);
+            capsuleMenu.Items.Add(pin);
+        }
+
         var remove = new MenuFlyoutItem { Text = "从盒子移除", Icon = new FontIcon { Glyph = "\uE74D" } };
         remove.Click += async (_, _) => await RemoveItemAsync(item);
 
@@ -526,6 +561,7 @@ public sealed partial class MainWindow : Window
         menu.Items.Add(editInfo);
         menu.Items.Add(editPath);
         menu.Items.Add(move);
+        if (group is not null) menu.Items.Add(capsuleMenu);
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(remove);
 
@@ -534,6 +570,27 @@ public sealed partial class MainWindow : Window
 
         menu.ShowAt(source, new FlyoutShowOptions { Position = e.GetPosition(source) });
         e.Handled = true;
+    }
+
+    private async Task ToggleCapsulePinAsync(AppItem item, ItemGroup group)
+    {
+        group.CapsuleItemIds ??= new List<string>();
+        if (group.CapsuleItemIds.Remove(item.Id))
+        {
+            _store.MarkDirty();
+            RefreshView();
+            return;
+        }
+
+        if (group.CapsuleItemIds.Count >= 3)
+        {
+            await ShowMessageAsync("胶囊已满", "每个分组最多固定 3 个工具到胶囊。");
+            return;
+        }
+
+        group.CapsuleItemIds.Add(item.Id);
+        _store.MarkDirty();
+        RefreshView();
     }
 
     private async Task RenameItemAsync(AppItem item)
@@ -634,6 +691,7 @@ public sealed partial class MainWindow : Window
         var sourceGroup = Box.Groups.FirstOrDefault(g => g.Items.Contains(item));
         if (sourceGroup is null) return;
 
+        sourceGroup.CapsuleItemIds?.Remove(item.Id);
         sourceGroup.Items.Remove(item);
         targets[index].Items.Add(item);
         _store.MarkDirty();
@@ -651,6 +709,7 @@ public sealed partial class MainWindow : Window
         if (!await ShowDialogAsync("移除工具", text, 210, "移除", "取消")) return;
 
         var group = Box.Groups.FirstOrDefault(g => g.Items.Contains(item));
+        group?.CapsuleItemIds?.Remove(item.Id);
         group?.Items.Remove(item);
         ShellIcons.Invalidate(item.Id);
         _store.MarkDirty();
@@ -1299,8 +1358,12 @@ public sealed partial class MainWindow : Window
         else if (orientationChanged) ApplyCapsuleOrientation();
 
         Data.Settings.RunAtStartup = startup.IsOn;
-        StartupEntry.Set(startup.IsOn);
+        var startupOk = StartupEntry.Set(startup.IsOn);
         _store.MarkDirty();
+
+        if (!startupOk)
+            await ShowMessageAsync("开机启动设置失败",
+                "无法写入当前用户的启动项，请检查注册表权限后重试。");
     }
 
     private async void OnImportClick(object sender, RoutedEventArgs e)

@@ -528,7 +528,7 @@ public sealed partial class MainWindow
         {
             var capsule = EnsureCapsule();
             var orientation = ResolveCapsuleOrientation();
-            var items = (_currentGroup?.Items ?? new System.Collections.ObjectModel.ObservableCollection<AppItem>()).ToList();
+            var items = CapsuleSelection(_currentGroup);
             capsule.Update(items, orientation);
 
             // The capsule is a window sized in physical pixels; hand it the panel's DPI scale first.

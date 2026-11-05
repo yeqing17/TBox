@@ -20,6 +20,7 @@ internal sealed class BoxManager
     private readonly DockPoll _dockPoll;
     private ShellHost? _shell;
     private MainWindow? _active;
+    private GlobalSearchWindow? _searchWindow;
     private bool _suppressActive;
 
     public TBoxData Data => _store.Data;
@@ -37,7 +38,7 @@ internal sealed class BoxManager
     /// <summary>The boxes the UI exposes (older files with more than four entries keep the extras on disk).</summary>
     public IReadOnlyList<BoxData> Boxes => Data.Boxes.Take(MaxBoxes).ToList();
 
-    public async void Start()
+    public async Task<bool> StartAsync()
     {
         try
         {
@@ -46,7 +47,7 @@ internal sealed class BoxManager
             var args = Environment.GetCommandLineArgs();
             var boxes = Boxes;
             var activeBox = boxes.FirstOrDefault(b => b.Id == Data.Settings.ActiveBoxId) ?? boxes.FirstOrDefault();
-            if (activeBox is null) return;
+            if (activeBox is null) return false;
 
             if (Data.Boxes.Count > MaxBoxes)
                 App.Log($"[box] only the first {MaxBoxes} of {Data.Boxes.Count} boxes are loaded");
@@ -94,10 +95,13 @@ internal sealed class BoxManager
                 await Task.Delay(300);
                 _active?.OpenSettings();
             }
+
+            return true;
         }
         catch (Exception ex)
         {
             App.Log("[box] start failed: " + ex);
+            return false;
         }
     }
 
@@ -107,13 +111,15 @@ internal sealed class BoxManager
         {
             _shell = new ShellHost();
             _shell.HotkeyPressed += ToggleActiveBox;
+            _shell.SearchHotkeyPressed += ShowGlobalSearch;
             _shell.TrayLeftClick += ToggleActiveBox;
             _shell.TrayRightClick += ShowTrayMenu;
 
             var hotkey = _shell.RegisterHotkey();
             var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "tbox.ico");
             var tray = _shell.AddTrayIcon(iconPath, "TBox 桌面工具箱");
-            App.Log($"[box] shell hwnd=0x{_shell.Handle:X} hotkey={hotkey} tray={tray} boxes={Data.Boxes.Count}");
+            App.Log($"[box] shell hwnd=0x{_shell.Handle:X} hotkey={hotkey} " +
+                    $"searchHotkey={_shell.SearchHotkeyRegistered} tray={tray} boxes={Data.Boxes.Count}");
         }
         catch (Exception ex)
         {
@@ -185,6 +191,17 @@ internal sealed class BoxManager
         window.ShowForUser();
     }
 
+    private void ShowGlobalSearch()
+    {
+        if (_searchWindow is null)
+        {
+            _searchWindow = new GlobalSearchWindow(this, _active);
+            _searchWindow.Closed += (_, _) => _searchWindow = null;
+        }
+
+        _searchWindow.Show();
+    }
+
     private void ShowTrayMenu()
     {
         if (_shell is null) return;
@@ -210,6 +227,7 @@ internal sealed class BoxManager
         items.Add(new("当前盒子钉住（不自动收起）", 16,
             Checked: _active?.Box.Settings.Pinned == true, Enabled: _active is not null));
         items.Add(new("", 0, Separator: true));
+        items.Add(new("全局搜索…", 17));
         items.Add(new("设置…", 20, Enabled: _active is not null));
         items.Add(new("退出", 30));
 
@@ -244,6 +262,9 @@ internal sealed class BoxManager
             case 16:
                 if (_active is { } pinWindow)
                     pinWindow.SetPinned(!pinWindow.Box.Settings.Pinned);
+                break;
+            case 17:
+                ShowGlobalSearch();
                 break;
             case 20:
                 _active?.OpenSettings();
@@ -429,6 +450,8 @@ internal sealed class BoxManager
     {
         App.Log("[box] exit");
         _store.SaveNow();
+        if (_store.LastSaveError is { Length: > 0 } saveError)
+            App.Log("[box] final save failed: " + saveError);
         _shell?.Dispose();
         _shell = null;
 

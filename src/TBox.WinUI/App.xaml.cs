@@ -35,7 +35,7 @@ public partial class App : Application
         }
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         Log("OnLaunched");
 
@@ -50,8 +50,8 @@ public partial class App : Application
         {
             _manager = new BoxManager();
             Log("BoxManager created");
-            _manager.Start();
-            Log("Activated");
+            if (await _manager.StartAsync()) Log("Activated");
+            else Log("Startup failed");
         }
         catch (Exception ex)
         {

@@ -134,23 +134,46 @@ public static class StartupEntry
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey);
             return key?.GetValue(ValueName) is string value && value.Length > 0;
         }
-        catch
+        catch (Exception ex)
         {
+            App.Log("[startup] read failed: " + ex.Message);
             return false;
         }
     }
 
-    public static void Set(bool enabled)
+    /// <summary>Returns false so the settings dialog can tell the user the registry write failed.</summary>
+    public static bool Set(bool enabled)
     {
         try
         {
             using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey, writable: true);
-            if (key is null) return;
+            if (key is null)
+            {
+                App.Log("[startup] could not open the Run key");
+                return false;
+            }
+
             if (enabled)
+            {
+                if (string.IsNullOrWhiteSpace(ExecutablePath))
+                {
+                    App.Log("[startup] executable path is empty");
+                    return false;
+                }
+
                 key.SetValue(ValueName, $"\"{ExecutablePath}\"");
+            }
             else if (key.GetValue(ValueName) is not null)
+            {
                 key.DeleteValue(ValueName, throwOnMissingValue: false);
+            }
+
+            return true;
         }
-        catch { /* registry may be locked down; the checkbox just won't stick */ }
+        catch (Exception ex)
+        {
+            App.Log("[startup] write failed: " + ex.Message);
+            return false;
+        }
     }
 }
